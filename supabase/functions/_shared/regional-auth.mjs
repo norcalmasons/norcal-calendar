@@ -41,7 +41,7 @@ export async function lookupIdentity(db, req, { regional = false } = {}) {
  const {data:staff,error:lookup}=await db.from('staff_accounts').select('id,email,display_name,role,enabled,removed_at,phone,district,regional_role,division_id').eq('email',email).eq('enabled',true).is('removed_at',null).maybeSingle();
  if(lookup)throw Error('Unable to verify staff authorization. Try again.');
  // During migration, only system admins can access unscoped legacy handlers.
- return {email,user,staff:(regional ? !!roleScope(staff) : legacyAllowed(staff))?staff:null,token};
+ return {email,user,staff:(regional ? !!staff && staff.enabled===true && staff.removed_at===null : legacyAllowed(staff))?staff:null,token};
 }
 
 export async function staffMfaState(db,user,token) {
@@ -69,17 +69,19 @@ export async function requireLegacyStaff(db,req) {
  // Use only in handlers whose reads and writes have been division-scoped.
  export async function requireRegionalAdmin(db,req) {
   const a=await lookupIdentity(db,req,{regional:true});
-  const scope=roleScope(a.staff);
-  if(!scope||!['system_admin','division_admin'].includes(scope.role))throw Error('Administrator access required');
+  if(!a.staff)throw Error('Administrator access required');
   await requireMfa(db,a.user,a.token);
-  if(scope.divisionId!==null){
-   const {data,error}=await db.from('divisions').select('id,onboarded').eq('id',scope.divisionId).eq('onboarded',true).maybeSingle();
-   if(error||!data)throw Error('Administrator division is not available');
-  }
-  return {...a.staff,scope};
+  if(legacyAllowed(a.staff))return {...a.staff,scope:{role:'system_admin',divisionId:null}};
+  const {data:assignments,error}=await db.from('staff_division_assignments').select('division_id').eq('staff_id',a.staff.id).eq('role','division_admin');
+  if(error||!assignments?.length)throw Error('Administrator access required');
+  const ids=assignments.map(x=>x.division_id);
+  const {data:divisions,error:divisionError}=await db.from('divisions').select('id').in('id',ids).eq('onboarded',true);
+  if(divisionError||!divisions?.length)throw Error('Administrator division is not available');
+  return {...a.staff,scope:{role:'division_admin',divisionIds:divisions.map(x=>x.id)}};
  }
  export function scopeQuery(query,scope) {
   if(scope?.role==='system_admin'&&scope.divisionId===null)return query;
+  if(scope?.role==='division_admin'&&Array.isArray(scope.divisionIds)&&scope.divisionIds.length>0&&scope.divisionIds.every(x=>Number.isInteger(x)&&x>0))return query.in('division_id',scope.divisionIds);
   if(!['division_admin','inspector'].includes(scope?.role)||!Number.isInteger(scope.divisionId)||scope.divisionId<=0)throw Error('Administrator division is required');
   return query.eq('division_id',scope.divisionId);
  }
