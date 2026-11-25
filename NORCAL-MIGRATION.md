@@ -22,3 +22,7 @@ Source: Division IV Calendar (read-only). Target: NorCal Masons Dev (initially e
 5. Isolated functional/security tests before production migration; actual staff/subscribers/documents and complete historical records migrate securely at cutover.
 
 This is preparation, not a verified backup, restored database, or production-ready release.
+
+## Development restoration
+
+A schema-only baseline has been applied to NorCal Dev and recorded under `supabase/migrations/`. A second migration explicitly aligns all 18 UUID defaults to the PostgreSQL built-in generator. Historical migrations remain reference-only. No source rows, storage objects, auth users, secrets, cron or network extensions were copied. The legacy direct anon/authenticated grants were revoked. Platform-provided functions and catalog-managed metadata are not recreated. Table/column comments and storage configuration require a separate check.
