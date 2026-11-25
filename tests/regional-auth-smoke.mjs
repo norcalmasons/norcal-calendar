@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import {roleScope,canAccessDivision,legacyAllowed,verifiedClaims,lookupIdentity,staffMfaState,requireLegacyStaff} from '../supabase/functions/_shared/regional-auth.mjs';
+const cases=[["system admin",{"role":"admin","regional_role":"system_admin","division_id":null},"system_admin",true],["division admin",{"role":"admin","regional_role":"division_admin","division_id":4},"division_admin",false],["inspector",{"role":"inspector","regional_role":"inspector","division_id":4},"inspector",false],["system admin with division",{"role":"admin","regional_role":"system_admin","division_id":4},null,false],["role mismatch",{"role":"inspector","regional_role":"division_admin","division_id":4},null,false],["unassigned role",{"role":"admin","regional_role":null,"division_id":4},null,false],["missing division",{"role":"inspector","regional_role":"inspector","division_id":null},null,false],["disabled",{"role":"admin","regional_role":"system_admin","division_id":null,"enabled":false},null,false],["removed",{"role":"admin","regional_role":"system_admin","division_id":null,"removed_at":"2026-11-25"},null,false],["bad division",{"role":"inspector","regional_role":"inspector","division_id":"4"},null,false]];
+for(const [label,input,want,legacy] of cases){const s={enabled:true,removed_at:null,...input};assert.equal(roleScope(s)?.role??null,want,label);assert.equal(legacyAllowed(s),legacy,label);}
+const sys=roleScope({enabled:true,removed_at:null,role:'admin',regional_role:'system_admin',division_id:null});
+const div=roleScope({enabled:true,removed_at:null,role:'admin',regional_role:'division_admin',division_id:4});
+for(const [scope,id,want] of [[sys,1,true],[sys,10,true],[div,4,true],[div,1,false],[div,null,false],[null,4,false]])assert.equal(canAccessDivision(scope,id),want);
+for(const [claims,user,want] of [[{sub:'u',aal:'aal2'},'u',true],[{sub:'u',aal:'aal1'},'u',false],[{sub:'other',aal:'aal2'},'u',false],[null,'u',false]])assert.equal(verifiedClaims(claims,user),want);
+const token=(aal,sub='u')=>'header.'+Buffer.from(JSON.stringify({aal,sub})).toString('base64url')+'.signature';
+const req=t=>new Request('https://example.invalid/',{headers:{authorization:'Bearer '+t}});
+const active={id:'staff',email:'admin@example.invalid',role:'admin',regional_role:'system_admin',division_id:null,enabled:true,removed_at:null};
+const mock=({staff=active,valid=true,confirmed=true,factors=[{id:'f',status:'verified',factor_type:'totp'}],lookupError=null,factorError=null}={})=>({auth:{getUser:async()=>valid?{data:{user:{id:'u',email:active.email,email_confirmed_at:confirmed?'now':null}},error:null}:{data:{user:null},error:new Error('invalid')},admin:{mfa:{listFactors:async()=>({data:{factors},error:factorError})}}},from:()=>({select(){return this},eq(){return this},is(){return this},async maybeSingle(){return {data:staff,error:lookupError}}})});
+assert.equal((await requireLegacyStaff(mock(),req(token('aal2')))).id,'staff');
+await assert.rejects(requireLegacyStaff(mock(),req(token('aal1'))));
+await assert.rejects(requireLegacyStaff(mock(),req(token('aal2','other'))));
+await assert.rejects(requireLegacyStaff(mock({valid:false}),req(token('aal2'))));
+await assert.rejects(requireLegacyStaff(mock({confirmed:false}),req(token('aal2'))));
+await assert.rejects(requireLegacyStaff(mock({factors:[]}),req(token('aal2'))));
+await assert.rejects(requireLegacyStaff(mock({factorError:new Error('failed')}),req(token('aal2'))));
+await assert.rejects(requireLegacyStaff(mock({lookupError:new Error('failed')}),req(token('aal2'))));
+await assert.rejects(requireLegacyStaff(mock({staff:{...active,regional_role:'division_admin',division_id:4}}),req(token('aal2'))));
+await assert.rejects(requireLegacyStaff(mock({staff:{...active,enabled:false}}),req(token('aal2'))));
+console.log('Regional authorization policy and mocked identity/MFA checks passed.');
