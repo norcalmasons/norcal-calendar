@@ -449,8 +449,16 @@ Deno.serve(async req=>{
   }
   if(action==='staff'){
    requiredAdmin(a);
-   const {data,error}=await db.from('staff_accounts').select('id,email,display_name,phone,role,enabled,created_at,removed_at,removed_by,first_name,middle_name,last_name,office_title,home_phone,mobile_phone,home_address,home_address2,city,state,zip,district,member_number').order('display_name');
-   if(error)throw Error(error.message);return json({items:data},200,origin);
+   const [accounts,assignments,divisions,districts]=await Promise.all([
+    db.from('staff_accounts').select('id,email,display_name,phone,role,regional_role,enabled,created_at,updated_at,removed_at,removed_by,first_name,middle_name,last_name,office_title,home_phone,mobile_phone,home_address,home_address2,city,state,zip,district,member_number').order('display_name'),
+    db.from('staff_division_assignments').select('staff_id,division_id,role,district').order('division_id'),
+    db.from('divisions').select('id,name,onboarded').order('display_order'),
+    db.from('districts').select('district_code,district_name,division_id').eq('active',true).order('district_code')
+   ]);
+   for(const r of [accounts,assignments,divisions,districts])if(r.error)throw Error(r.error.message);
+   const byStaff=new Map();
+   for(const row of assignments.data||[]){const list=byStaff.get(row.staff_id)||[];list.push({division_id:row.division_id,role:row.role,district:row.district});byStaff.set(row.staff_id,list)}
+   return json({items:(accounts.data||[]).map(x=>({...x,assignments:byStaff.get(x.id)||[]})),divisions:divisions.data||[],districts:districts.data||[]},200,origin);
   }
   if(action==='staff-toggle'){
    if(req.method!=='POST')return err('POST required',405,origin);
@@ -496,47 +504,27 @@ Deno.serve(async req=>{
    return json({ok:true,message:'Inspector record restored as disabled. Activate separately to grant access.'},200,origin);
   }
   if(action==='staff-save'){
-   requiredAdmin(a);
-   const b=await req.json(),email=clean(b.email,250).toLowerCase();
-   if(!goodEmail(email))throw Error('Valid email required');
+   const admin=requiredAdmin(a);
    if(req.method!=='POST')return err('POST required',405,origin);
-   const role=b.role==='admin'?'admin':'inspector';
+   const b=await req.json(),email=clean(b.email,250).toLowerCase();
+   if(!goodEmail(email)||typeof b.enabled!=='boolean'||!Array.isArray(b.assignments))throw Error('Valid email, access status and division assignments required');
    const first_name=clean(b.first_name,80),middle_name=clean(b.middle_name,80),last_name=clean(b.last_name,80);
-   // A display-only admin form option; no fake district is saved to the database.
-   const districtSelection=clean(b.district,12);
-   if(districtSelection==='at_large'&&role!=='inspector')
-    throw Error('Inspector at Large is only valid for inspector accounts');
-   const district=districtSelection==='at_large'?'':districtSelection;
-   const member_number=clean(b.member_number,30);
-   const home_phone=clean(b.home_phone,50),mobile_phone=clean(b.mobile_phone,50);
+   const member_number=clean(b.member_number,30),home_phone=clean(b.home_phone,50),mobile_phone=clean(b.mobile_phone,50);
    const home_address=clean(b.home_address,220),home_address2=clean(b.home_address2,220);
    const city=clean(b.city,120),stateValue=clean(b.state,2).toUpperCase(),zip=clean(b.zip,12);
    const office_title=clean(b.office_title,80)||'Inspector';
    const display_name=clean(b.display_name,150)||[first_name,middle_name,last_name].filter(Boolean).join(' ');
-   const {data:existing,error:lookupError}=await db.from('staff_accounts')
-     .select('id,role,removed_at').eq('email',email).maybeSingle();
-   if(lookupError)throw Error(lookupError.message);
-   if(existing?.removed_at)throw Error('This inspector was removed. Use Restore Access instead.');
-   if(existing?.role==='admin' && role!=='admin')throw Error('Existing administrators cannot be demoted here');
-   if(role==='inspector'&&!existing){
-     for(const [label,value] of [['first name',first_name],['last name',last_name],['district',districtSelection],['member ID',member_number],['mobile phone',mobile_phone],['street address',home_address],['city',city],['state',stateValue],['ZIP',zip]]){
-       if(!value)throw Error('Please provide inspector '+label);
-     }
+   if(!b.expected_updated_at&&b.assignments.some((x:any)=>x?.role==='inspector')){
+    for(const [label,value] of [['first name',first_name],['last name',last_name],['member ID',member_number],['mobile phone',mobile_phone],['street address',home_address],['city',city],['state',stateValue],['ZIP',zip]])if(!value)throw Error('Please provide inspector '+label);
    }
-   if(district && !['402','404','410','414','418','422','428','438'].includes(district))throw Error('Choose a valid Division IV district');
    if(stateValue && !/^[A-Z]{2}$/.test(stateValue))throw Error('Enter a valid two-letter state');
    if(zip && !/^\d{5}(?:-\d{4})?$/.test(zip))throw Error('Enter a valid ZIP code');
    if(member_number && !/^\d{1,20}$/.test(member_number))throw Error('Member ID must contain digits');
-   const record={
-    email,display_name,role,enabled:Boolean(b.enabled),phone:clean(b.phone,50)||mobile_phone,
-    first_name,middle_name,last_name,office_title,
-    district:district||null,member_number:member_number||null,
-    home_phone,mobile_phone,home_address,home_address2,city,state:stateValue,zip
-   };
-   if(email===a.email && (!record.enabled||role!=='admin'))throw Error('You cannot disable your own administrator account');
-   const {error}=await db.from('staff_accounts').upsert(record,{onConflict:'email'});
+   if(b.assignments.length>5||b.assignments.some((x:any)=>!x||!Number.isInteger(x.division_id)||!['inspector','division_admin'].includes(x.role)||(x.district!==null&&typeof x.district!=='string')))throw Error('Invalid division assignments');
+   const profile={email,display_name,enabled:b.enabled,phone:clean(b.phone,50)||mobile_phone,first_name,middle_name,last_name,office_title,member_number,home_phone,mobile_phone,home_address,home_address2,city,state:stateValue,zip};
+   const {error}=await db.rpc('regional_staff_save',{p_actor:admin.id,p_profile:profile,p_assignments:b.assignments,p_expected_updated_at:b.expected_updated_at||null});
    if(error)throw Error(error.message);
-   return json({ok:true},200,origin);
+   return json({ok:true,message:'Staff record and division assignments saved.'},200,origin);
   }
   if(action==='settings'){
    requiredAdmin(a);
