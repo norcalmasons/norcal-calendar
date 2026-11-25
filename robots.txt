@@ -1,5 +1,2 @@
 User-agent: *
-Allow: /
-Disallow: /app/
-
-Sitemap: https://divisionivmasons.org/sitemap.xml
+Disallow: /

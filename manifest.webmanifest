@@ -1,7 +1,7 @@
 {
-  "name": "Division IV",
-  "short_name": "Division IV",
-  "description": "Division IV Masons — Calendar and Inspector Desk",
+  "name": "NorCal Masons Dev",
+  "short_name": "NorCal Dev",
+  "description": "Northern California Masons — isolated development preview",
   "display": "standalone",
   "background_color": "#0b2138",
   "theme_color": "#0b2138",
