@@ -1079,35 +1079,71 @@ $('log-action').onchange=()=>loadHistory(0);
 $('history-prev').onclick=()=>loadHistory(historyPage-1);
 $('history-next').onclick=()=>loadHistory(historyPage+1);
 let showRemovedInspectors=false;
-const staffProfileFields=['email','display_name','phone','role','first_name','middle_name','last_name','office_title','district','member_number','home_phone','mobile_phone','home_address','home_address2','city','state','zip'];
+const staffProfileFields=['email','display_name','phone','first_name','middle_name','last_name','office_title','member_number','home_phone','mobile_phone','home_address','home_address2','city','state','zip'];
 // Display labels only: role values stay 'inspector'/'admin' for all permission checks.
 function accessLevelLabel(role){return role==='inspector'?'User':role==='admin'?'Admin':nice(role);}
+let staffDivisions=[],staffDistricts=[];
 function inspectorDistrictLabel(s){
- if(s.role==='inspector')return s.district?'District '+s.district:'Inspector at Large';
- return s.district?'District '+s.district:null;
+ if(s.regional_role==='system_admin')return 'System Administrator · All divisions';
+ return (s.assignments||[]).map(a=>{
+  const d=staffDivisions.find(x=>x.id===a.division_id);
+  return (d?.name||'Division '+a.division_id)+' — '+(a.role==='division_admin'?'Division Administrator':'Inspector')+(a.district?' · District '+a.district:a.role==='inspector'?' at Large':'');
+ }).join(' | ')||'No assignments';
+}
+function renderStaffAssignments(assignments=[],systemAdmin=false){
+ const root=$('staff-assignments');root.replaceChildren();
+ root.dataset.systemAdmin=systemAdmin?'1':'0';
+ if(systemAdmin){root.textContent='System Administrator — all divisions automatically. Global access cannot be changed here.';return}
+ for(const d of staffDivisions){
+  const saved=assignments.find(x=>x.division_id===d.id);
+  const row=document.createElement('div');row.className='form-grid';row.style.marginBottom='12px';row.dataset.divisionId=String(d.id);
+  const label=document.createElement('label');label.className='wide checkline';
+  const check=document.createElement('input');check.type='checkbox';check.dataset.assignmentCheck='1';check.checked=!!saved;
+  label.append(check,document.createTextNode(d.name+(d.onboarded?'':' — setup pending')));
+  const roleLabel=document.createElement('label');roleLabel.textContent='Access level';
+  const role=document.createElement('select');role.dataset.assignmentRole='1';
+  for(const [v,t] of [['inspector','Inspector'],['division_admin','Division Administrator']])role.add(new Option(t,v));
+  role.value=saved?.role||'inspector';roleLabel.append(role);
+  const districtLabel=document.createElement('label');districtLabel.textContent='District assignment';
+  const district=document.createElement('select');district.dataset.assignmentDistrict='1';
+  district.add(new Option('Select assignment',''));district.add(new Option('No district / Inspector at Large','at_large'));
+  for(const x of staffDistricts.filter(x=>x.division_id===d.id))district.add(new Option(x.district_name||'District '+x.district_code,x.district_code));
+  if(saved?.district&&!Array.from(district.options).some(o=>o.value===saved.district))district.add(new Option('District '+saved.district+' (inactive)',saved.district));
+  district.value=saved?saved.district||'at_large':'';
+  districtLabel.append(district);
+  function sync(){roleLabel.hidden=districtLabel.hidden=!check.checked;role.disabled=district.disabled=!check.checked;district.required=check.checked;staffFormRequirements()}
+  check.addEventListener('change',sync);role.addEventListener('change',staffFormRequirements);row.append(label,roleLabel,districtLabel);root.append(row);sync();
+ }
+ if(!staffDivisions.length)root.textContent='Division directory unavailable. Refresh the inspector list before saving.';
+}
+function staffAssignments(){
+ return Array.from($('staff-assignments').querySelectorAll('[data-division-id]')).filter(row=>row.querySelector('[data-assignment-check]').checked).map(row=>{
+  const district=row.querySelector('[data-assignment-district]').value;
+  return {division_id:Number(row.dataset.divisionId),role:row.querySelector('[data-assignment-role]').value,district:district==='at_large'?null:district};
+ });
 }
 function staffFormRequirements(){
  const form=$('staff-form');
- const required=form.dataset.editing!=='1'&&form.elements.role.value==='inspector';
- for(const key of ['member_number','first_name','last_name','district','mobile_phone','home_address','city','state','zip']){
-  form.elements[key].required=required;
- }
+ const required=form.dataset.editing!=='1'&&staffAssignments().some(a=>a.role==='inspector');
+ for(const key of ['member_number','first_name','last_name','mobile_phone','home_address','city','state','zip'])form.elements[key].required=required;
 }
 function clearStaffForm(){
  const form=$('staff-form');form.reset();formFeedback(form);
- form.dataset.editing='0';form.elements.email.readOnly=false;
+ form.dataset.editing='0';form.elements.email.readOnly=false;form.elements.enabled.disabled=false;form.elements.expected_updated_at.value='';renderStaffAssignments();
  form.elements.state.value='CA';form.elements.office_title.value='Inspector';
  $('staff-form-mode').textContent='Add Inspector';
  staffFormRequirements();
 }
 $('staff-new').onclick=()=>{clearStaffForm();$('staff-form').scrollIntoView({behavior:'smooth',block:'start'})};
 $('staff-form-clear').onclick=clearStaffForm;
-$('staff-form').elements.role.addEventListener('change',staffFormRequirements);
+$('staff-form').addEventListener('change',staffFormRequirements);
 staffFormRequirements();
 async function loadStaff(){
  const root=$('staff-list');root.textContent='Loading inspectors…';
  try{
   const r=await api('staff');
+  staffDivisions=r.divisions||[];staffDistricts=r.districts||[];
+  if($('staff-form').dataset.editing!=='1')renderStaffAssignments();
   root.replaceChildren();
   const list=(r.items||[]).filter(x=>showRemovedInspectors||!x.removed_at);
   for(const s of list){
@@ -1116,7 +1152,7 @@ async function loadStaff(){
    const name=document.createElement('strong');name.textContent=s.display_name||s.email;
    const meta=document.createElement('small');
    const access=s.removed_at?'Removed on '+new Date(s.removed_at).toLocaleDateString():s.enabled?'Active':'Disabled';
-   meta.textContent=[s.email,accessLevelLabel(s.role),inspectorDistrictLabel(s),s.member_number?'Member '+s.member_number:null,access].filter(Boolean).join(' · ');
+   meta.textContent=[s.email,inspectorDistrictLabel(s),s.member_number?'Member '+s.member_number:null,access].filter(Boolean).join(' · ');
    info.append(name,document.createElement('br'),meta);
    const buttons=document.createElement('div');buttons.className='staff-actions';
    if(s.removed_at){
@@ -1135,8 +1171,10 @@ async function loadStaff(){
     edit.onclick=()=>{
      const form=$('staff-form');
      for(const key of staffProfileFields)form.elements[key].value=s[key]??'';
-      if(s.role==='inspector'&&!s.district)form.elements.district.value='at_large';
      form.elements.enabled.checked=s.enabled;
+     form.elements.enabled.disabled=s.regional_role==='system_admin';
+     form.elements.expected_updated_at.value=s.updated_at||'';
+     renderStaffAssignments(s.assignments||[],s.regional_role==='system_admin');
      form.dataset.editing='1';
      form.elements.email.readOnly=true;
      $('staff-form-mode').textContent='Edit Inspector: '+(s.display_name||s.email);
@@ -1168,7 +1206,7 @@ async function loadStaff(){
        // element (including the editing form and scroll position) untouched.
        s.enabled=result.staff.enabled===true;
        const updatedAccess=s.enabled?'Active':'Disabled';
-       meta.textContent=[s.email,accessLevelLabel(s.role),
+       meta.textContent=[s.email,
         inspectorDistrictLabel(s),
         s.member_number?'Member '+s.member_number:null,
         updatedAccess].filter(Boolean).join(' · ');
@@ -1216,7 +1254,9 @@ $('staff-form').onsubmit=async e=>{
  formFeedback(e.target,'Saving inspector record…','pending');
  try{
   const payload=values(e.target);
-  if(e.target.dataset.editing!=='1'&&payload.role==='inspector'&& !e.target.reportValidity())return;
+  payload.assignments=staffAssignments();payload.enabled=e.target.elements.enabled.checked;payload.expected_updated_at=e.target.elements.expected_updated_at.value||null;
+  if($('staff-assignments').dataset.systemAdmin!=='1'&&!payload.assignments.length)throw Error('Select at least one division');
+  if(!e.target.reportValidity())return;
   const result=await api('staff-save',payload);
   clearStaffForm();
   await loadStaff();

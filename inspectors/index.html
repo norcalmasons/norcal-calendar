@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NorCal Inspector Desk | Grand Lodge of California</title><meta name="description" content="Submit, change, or cancel Division IV Masonic calendar events.">
-<meta name="apple-mobile-web-app-title" content="NorCal Masons"><link rel="manifest" href="/inspectors/manifest.webmanifest?v=20261125a"><meta name="theme-color" content="#142d46"><link rel="icon" type="image/x-icon" href="/assets/favicon.ico?v=20261125a"><link rel="icon" type="image/png" sizes="256x256" href="/assets/favicon.png?v=20261125a"><link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png?v=20261125a"><link rel="stylesheet" href="/app/styles.css?v=32"><link rel="stylesheet" href="/shared/header.css?v=2"><script defer src="/shared/header.js?v=5"></script><script defer src="/script.js?v=5"></script><script defer src="/app/bootstrap.js"></script><script defer src="/app/app.js?v=65"></script>
+<meta name="apple-mobile-web-app-title" content="NorCal Masons"><link rel="manifest" href="/inspectors/manifest.webmanifest?v=20261125a"><meta name="theme-color" content="#142d46"><link rel="icon" type="image/x-icon" href="/assets/favicon.ico?v=20261125a"><link rel="icon" type="image/png" sizes="256x256" href="/assets/favicon.png?v=20261125a"><link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png?v=20261125a"><link rel="stylesheet" href="/app/styles.css?v=32"><link rel="stylesheet" href="/shared/header.css?v=2"><script defer src="/shared/header.js?v=5"></script><script defer src="/script.js?v=5"></script><script defer src="/app/bootstrap.js"></script><script defer src="/app/app.js?v=20261125-staff2"></script>
 <script defer src="/app/lodges-admin.js?v=5"></script><script defer src="/app/corrections-admin.js?v=2"></script><script defer src="/app/site-settings-admin.js?v=6"></script><script defer src="/app/resources.js?v=3"></script><script defer src="/app/newsletter-admin.js?v=5"></script>
 <script defer src="/app/mfa.js?v=9"></script><script defer src="/app/bulk-import.js?v=10"></script>
 <meta name="robots" content="noindex, nofollow, noarchive">
@@ -354,7 +354,7 @@
 <button id="refresh-history" class="secondary" type="button">Refresh</button>
 </div><div id="history-content" class="timeline"></div><div class="pagination"><button id="history-prev" type="button" class="secondary">← Previous</button><span id="history-page">Page 1</span><button id="history-next" type="button" class="secondary">Next →</button></div></section>
 <section id="tab-staff" class="panel hidden"><h3>Inspectors</h3>
-<p class="muted">Administrators manage inspector sign-in, district assignments, and private contact records here. Removing access preserves previous publication decisions and activity history.</p>
+<p class="muted">System administrators manage staff sign-in, division and district assignments, and private contact records here. Removing access preserves previous publication decisions and activity history.</p>
 <div id="staff-list"></div>
 <div class="form-actions"><button type="button" id="toggle-removed" class="secondary">Show removed inspectors</button><button id="staff-new" type="button" class="secondary">Add New Inspector</button></div>
 <hr>
@@ -369,8 +369,7 @@
 <label>Last name * <input name="last_name" maxlength="80" autocomplete="family-name"></label>
 <label>Display name (optional) <input name="display_name" maxlength="150" placeholder="Defaults to full name"></label>
 <label>Office <input name="office_title" maxlength="80" value="Inspector"></label>
-<label>District assignment * <select name="district"><option value="">Select assignment</option><option value="at_large">Inspector at Large — No District</option><option value="402">402</option><option value="404">404</option><option value="410">410</option><option value="414">414</option><option value="418">418</option><option value="422">422</option><option value="428">428</option><option value="438">438</option></select></label>
-<label>Access Level <select name="role"><option value="inspector">User</option><option value="admin">Admin</option></select></label>
+<fieldset class="wide" id="staff-assignment-fieldset"><legend>Division and district assignments *</legend><p class="muted">Select each assigned division, then its access level and district. District is an assignment, not an event-access restriction.</p><div id="staff-assignments">Loading divisions…</div></fieldset><input type="hidden" name="expected_updated_at">
 <label class="checkline"><input type="checkbox" name="enabled"> Access enabled (activate after review)</label>
 <div class="wide"><h4>Private contact information</h4></div>
 <label>Home phone <input name="home_phone" type="tel" maxlength="50" autocomplete="tel-national"></label>
