@@ -1,10 +1,9 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0';
 const db=createClient(Deno.env.get('SUPABASE_URL')!,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
  {auth:{persistSession:false,autoRefreshToken:false}});
-const allowed=new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org',
- 'https://calendar.divisionivmasons.org','https://scottxian.github.io',
- 'http://localhost:5173','http://127.0.0.1:5173'
-]);
+const allowed=new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 const keys=[
  'calendar_id','calendar_timezone','website_event_request_url','website_inspector_desk_url',
  'website_grand_lodge_url','website_site_url','website_calendar_fallback_url','website_navigation'
@@ -12,11 +11,11 @@ const keys=[
 const fallback:Record<string,any>={
  calendar_id:'',
  calendar_timezone:'America/Los_Angeles',
- website_event_request_url:'https://divisionivmasons.org/events/',
- website_inspector_desk_url:'https://divisionivmasons.org/inspectors/',
+ website_event_request_url:'https://dev.norcalmasons.org/events/',
+ website_inspector_desk_url:'https://dev.norcalmasons.org/inspectors/',
  website_grand_lodge_url:'https://member.freemason.org/public_lodges/search',
- website_site_url:'https://divisionivmasons.org/',
- website_calendar_fallback_url:'https://divisionivmasons.org/calendar/',
+ website_site_url:'https://dev.norcalmasons.org/',
+ website_calendar_fallback_url:'https://dev.norcalmasons.org/calendar/',
  website_navigation:[
   {group:'division',label:'About Division IV',href:'/#about'},
   {group:'division',label:'Community',href:'/#community'},
@@ -126,13 +125,10 @@ Deno.serve(async req=>{
  if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
  try{
   const action=new URL(req.url).searchParams.get('action')||'public';
-  if(origin&&!allowed.has(origin)&&action!=='public')return fail('Origin not allowed',403,origin);
+  if(origin&&!allowed.has(origin))return fail('Origin not allowed',403,origin);
   if(action==='public'){
    if(req.method!=='GET')return fail('GET required',405,origin);
-   return new Response(JSON.stringify({settings:await getSettings()}),{
-     status:200,headers:{'content-type':'application/json; charset=utf-8',
-     'cache-control':'no-store','access-control-allow-origin':'*'}
-   });
+   return reply({settings:await getSettings()},200,origin);
   }
   const admin=await requireAdmin(req);
   if(action==='admin'){
@@ -148,9 +144,7 @@ Deno.serve(async req=>{
    if(!changed.length||changed.length>keys.length)throw Error('No valid settings to update');
    for(const [k] of changed)if(!keys.includes(k))throw Error('Setting is not editable: '+k);
    const existing=await getSettings();
-   if(Object.hasOwn(entries,'calendar_id')&&entries.calendar_id!==existing.calendar_id &&
-    b.confirm_calendar_change!=='CHANGE CALENDAR')
-     throw Error('Changing the publishing calendar requires explicit confirmation');
+   if(Object.hasOwn(entries,'calendar_id')&&entries.calendar_id!==existing.calendar_id)throw Error('External calendar IDs are locked in NorCal Dev.');
    const now=new Date().toISOString();
    const rows=changed.map(([setting_key,val])=>({
      setting_key,setting_value:validate(setting_key,val),updated_at:now,updated_by:admin.id

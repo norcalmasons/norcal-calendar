@@ -1,9 +1,11 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0';
 const url=Deno.env.get('SUPABASE_URL')!;
 const db=createClient(url,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,{auth:{persistSession:false,autoRefreshToken:false}});
 const bucket='division-inspector-resources';
 const maxBytes=20*1024*1024;
-const allowed=new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org','https://calendar.divisionivmasons.org','https://scottxian.github.io','http://localhost:5173','http://127.0.0.1:5173']);
+const allowed=new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 
 const mimetypes:Record<string,string>={
  pdf:'application/pdf',doc:'application/msword',

@@ -1,13 +1,10 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2';
 const url = Deno.env.get('SUPABASE_URL')!;
 const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const db = createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
-const allowedOrigins = new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org',
- 'https://headless-odfdmxtmddz-scottyjchristian-1410.wix-site-host.com',
- 'https://calendar.divisionivmasons.org',
- 'https://scottxian.github.io',
- 'http://localhost:5173','http://127.0.0.1:5173'
-]);
+const allowedOrigins = new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 const publicFields='id,lodge_name,lodge_number,district,address_line1,city,county,state,meeting_day,meeting_time,meeting_notes,official_url,record_version,updated_at';
 function reply(body:unknown,status=200,origin=''){
  const headers:Record<string,string>={'content-type':'application/json; charset=utf-8','cache-control':'no-store','vary':'Origin'};

@@ -1,9 +1,11 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2';
 const url = Deno.env.get('SUPABASE_URL')!;
 const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const db = createClient(url, service, {auth:{persistSession:false,autoRefreshToken:false}});
-const publicHosts = new Set(['scottxian.github.io','calendar.divisionivmasons.org','divisionivmasons.org','www.divisionivmasons.org']);
-const allowed = new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org','https://scottxian.github.io','https://calendar.divisionivmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
+const publicHosts = new Set(['dev.norcalmasons.org','localhost','127.0.0.1']);
+const allowed = new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 const fields=['title','event_name','calendar_title_override','event_type','hosted_by','district','start_local','end_local','event_mode','location_name','location_address','location_address1','location_address2','location_city','location_state','location_zip','location_tbd','virtual_meeting_url','public_description','attire','invited_audience','registration_url','payment_url','flyer_url','poc_name','poc_position','poc_phone','poc_email','cost_details'];
 const choices=new Set(['new','change','cancel']);
 const locationKeys=['location_name','location_address1','location_address2','location_city','location_state','location_zip'];
@@ -118,11 +120,11 @@ Deno.serve(async req=>{
  try{
   const u=new URL(req.url), action=u.searchParams.get('action')||'config';
   const a=await auth(req);
-  if(a.staff && !['config','me','locate','submit'].includes(action)) await verifiedMfaRequired(a.user,a.token);
+  if(a.staff && !['config','me'].includes(action)) await verifiedMfaRequired(a.user,a.token);
   if(action==='config'){
    const [types,enabled,districts,hosts,lodges,positions]=await Promise.all([db.from('event_types').select('label').eq('enabled',true).order('sort_order'),setting('public_submissions_enabled',false),setting('district_numbers',[]),db.from('events').select('hosted_by,location_name,location_city,attire,invited_audience,cost_details').eq('status','active').order('created_at',{ascending:false}).limit(1000),db.from('lodges').select('lodge_name,lodge_number,abbreviation').eq('active',true).limit(1000),db.from('poc_positions').select('title').eq('active',true).order('sort_order',{ascending:true}).order('title')]);
    const publicSuggestions=(field:string)=>[...new Set((hosts.data||[]).map((x:any)=>String(x[field]||'').trim()).filter(Boolean))].slice(0,100);
-   return json({event_types:(types.data||[]).map((x:any)=>x.label),districts,suggestions:{venue:publicSuggestions('location_name'),city:publicSuggestions('location_city'),attire:publicSuggestions('attire'),audience:publicSuggestions('invited_audience'),cost:publicSuggestions('cost_details'),position:(positions.data||[]).map((x:any)=>x.title)},lodge_titles:(lodges.data||[]).map((x:any)=>({name:x.lodge_name,number:x.lodge_number,abbreviation:x.abbreviation})),hosts:[...(hosts.data||[]).map((x:any)=>x.hosted_by),...(lodges.data||[]).map((x:any)=>[x.lodge_name,x.lodge_number?'No. '+x.lodge_number:''].filter(Boolean).join(' '))].filter(Boolean),public_submissions_enabled:enabled,turnstile_site_key:Deno.env.get('TURNSTILE_SITE_KEY')||null,turnstile_ready:Boolean(Deno.env.get('TURNSTILE_SITE_KEY')&&Deno.env.get('TURNSTILE_SECRET')),logged_in:!!a.user,staff:a.staff},200,origin);
+   return json({event_types:(types.data||[]).map((x:any)=>x.label),districts,suggestions:{venue:publicSuggestions('location_name'),city:publicSuggestions('location_city'),attire:publicSuggestions('attire'),audience:publicSuggestions('invited_audience'),cost:publicSuggestions('cost_details'),position:(positions.data||[]).map((x:any)=>x.title)},lodge_titles:(lodges.data||[]).map((x:any)=>({name:x.lodge_name,number:x.lodge_number,abbreviation:x.abbreviation})),hosts:[...(hosts.data||[]).map((x:any)=>x.hosted_by),...(lodges.data||[]).map((x:any)=>[x.lodge_name,x.lodge_number?'No. '+x.lodge_number:''].filter(Boolean).join(' '))].filter(Boolean),public_submissions_enabled:enabled,turnstile_site_key:Deno.env.get('TURNSTILE_SITE_KEY')||null,turnstile_ready:Boolean(Deno.env.get('TURNSTILE_SITE_KEY')&&Deno.env.get('TURNSTILE_SECRET')),logged_in:!!a.user,staff:a.staff?{role:a.staff.role,display_name:a.staff.display_name}:null},200,origin);
   }
   if(action==='me'){
    const mfa=a.staff?await staffMfaState(a.user,a.token):null;
@@ -148,7 +150,7 @@ Deno.serve(async req=>{
    const body=await req.json(),kind=body.kind||'new';
    if(!choices.has(kind))throw Error('Unknown submission type');
    const enabled=await setting('public_submissions_enabled',false);
-   if(!enabled&&!a.staff)throw Error('Public submissions are in test mode. Please try again later.');
+   if(!a.staff)throw Error('Public submissions are disabled in NorCal Dev.');
    const requester_email=clean(body.email,250).toLowerCase();
    if(!goodEmail(requester_email))throw Error('Enter a valid contact email');
    const requester_name=clean(body.name,150);
@@ -571,7 +573,7 @@ Deno.serve(async req=>{
    requiredAdmin(a);const b=await req.json();
    const allowedSettings=['public_submissions_enabled','public_email_links'];
    if(!allowedSettings.includes(b.key))throw Error('Setting cannot be edited here');
-   if(b.key==='public_submissions_enabled'&&b.value===true&&(!Deno.env.get('TURNSTILE_SECRET')||!Deno.env.get('TURNSTILE_SITE_KEY')))throw Error('Public submissions require both Turnstile keys before launch.');
+   if(b.key==='public_submissions_enabled'&&b.value===true)throw Error('Public submissions are disabled in NorCal Dev.');
    const val=b.key==='public_email_links'?clean(b.value,8000):Boolean(b.value);
    const {error}=await db.from('system_settings').upsert({setting_key:b.key,setting_value:val,updated_at:new Date().toISOString(),updated_by:a.staff.id});
    if(error)throw Error(error.message);return json({ok:true},200,origin);

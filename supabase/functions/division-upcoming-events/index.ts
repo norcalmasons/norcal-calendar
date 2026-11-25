@@ -1,3 +1,5 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 // Public, read-only preview of events already published to the Division IV Google Calendar.
 // Never return submission records, contact information, private notes, meeting links or credentials.
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0';
@@ -7,11 +9,7 @@ const db = createClient(
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   { auth: { persistSession: false, autoRefreshToken: false } }
 );
-const allowedOrigins = new Set([
-  'https://divisionivmasons.org',
-  'https://www.divisionivmasons.org',
-  'https://scottxian.github.io'
-]);
+const allowedOrigins = new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 const response = (data: unknown, status: number, origin: string) =>
   new Response(JSON.stringify(data), {
     status,
@@ -50,7 +48,7 @@ Deno.serve(async req => {
     let query = db.from('events')
       .select('id,title,event_type,hosted_by,district,starts_at,ends_at,timezone,event_mode,location_name,location_address,location_tbd,public_description,attire,invited_audience')
       .eq('status', 'active')
-      .not('google_event_id', 'is', null)
+      // NorCal Dev uses previously synchronized historical data; no live calendar IDs are copied.
       .not('calendar_last_synced_at', 'is', null);
     query = month
       ? query.lt('starts_at', until).gt('ends_at', from)

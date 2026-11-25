@@ -1,8 +1,10 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2';
 const url=Deno.env.get('SUPABASE_URL')!;
 const key=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const db=createClient(url,key,{auth:{persistSession:false}});
-const origins=new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org','https://scottxian.github.io','https://calendar.divisionivmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
+const origins=new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 const allowedModes=new Set(['in_person','hybrid','online']);
 const fields=['event_name','event_type','hosted_by','district','start_local','end_local','event_mode','location_name','location_address1','location_address2','location_city','location_state','location_zip','location_tbd','virtual_meeting_url','public_description','attire','invited_audience','registration_url','payment_url','flyer_url','poc_name','poc_position','poc_phone','poc_email','cost_details'];
 const fieldLimits={event_name:180,public_description:4000,poc_name:150,poc_position:120,poc_phone:50,poc_email:250,cost_details:180};

@@ -1,9 +1,11 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0';
 import { weeklyWindow } from './weekly-agenda.mjs';
 import { buildWeeklyContent } from './weekly-content.mjs';
 const db=createClient(Deno.env.get('SUPABASE_URL')!,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,{auth:{persistSession:false,autoRefreshToken:false}});
-const origins=new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org','http://127.0.0.1:5173','http://localhost:5173']);
+const origins=new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 const fromEnv=()=>Deno.env.get('MAIL_FROM')||'';
 const key=()=>Deno.env.get('RESEND_API_KEY')||'';
 // Separate full-access Marketing credential; never replace the transactional send-only key.
@@ -20,7 +22,7 @@ const utcDate=(v:any)=>new Date(v).toISOString();
  * Reuse the public site's emblem URL and colors; email CSS is inline for clients.
  * Image blocking degrades gracefully because the brand name is also real text.
  */
-const DIVISION_EMBLEM='https://divisionivmasons.org/app/assets/division-iv-emblem.png?v=20261028b';
+const DIVISION_EMBLEM='https://dev.norcalmasons.org/app/assets/division-iv-emblem.png?v=20261028b';
 type MailLayout={
  preheader:string;eyebrow:string;title:string;intro:string;content:string;
  actionText?:string;actionUrl?:string;finePrint?:string;unsubscribe?:boolean;
@@ -57,7 +59,7 @@ ${o.finePrint?`<p style="margin:20px 0 0;padding-top:16px;border-top:1px solid #
 <tr><td bgcolor="#102c49" align="center" style="background:#102c49;padding:23px 20px 25px">
 <p style="margin:0 0 6px;color:#f0d99d;font-size:11px;font-weight:700;letter-spacing:1.6px">DIVISION IV MASONS</p>
 <p style="margin:0 0 8px;color:#dce7ed;font-size:12px;line-height:1.6">Fellowship &nbsp;&middot;&nbsp; Leadership &nbsp;&middot;&nbsp; Service</p>
-<p style="margin:0;color:#b8c5d0;font-size:12px;line-height:1.7"><a href="https://divisionivmasons.org/" style="color:#e4edf3;text-decoration:underline">divisionivmasons.org</a></p>
+<p style="margin:0;color:#b8c5d0;font-size:12px;line-height:1.7"><a href="https://dev.norcalmasons.org/" style="color:#e4edf3;text-decoration:underline">dev.norcalmasons.org</a></p>
 ${unsubscribe}
 </td></tr></table></td></tr></table></body></html>`;
 }
@@ -78,6 +80,7 @@ function confirmationHtml(link:string){
 const allowedFields=['sending_enabled','signup_enabled','free_plan_confirmed','resend_segment_id','monthly_enabled','weekly_enabled','monthly_day','weekly_day','monthly_send_hour','weekly_send_hour','lookahead_days'];
 async function config(){const {data,error}=await db.from('newsletter_settings').select('*').eq('id',true).single();if(error)throw Error('Newsletter settings unavailable');return data;}
 async function resend(path:string,method='GET',body?:unknown,mode:'marketing'|'transactional'='marketing'){
+ throw Error('External email and contact synchronization disabled in NorCal Dev');
  const credential=mode==='transactional'?key():marketingKey();
  if(!credential)throw Error(mode==='marketing'?'Resend Marketing API key not configured. Contact an administrator.':'Resend transactional email is not configured');
  const r=await fetch('https://api.resend.com'+path,{method,headers:{authorization:'Bearer '+credential,'content-type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
@@ -103,7 +106,7 @@ function localParts(date=new Date()){
  return {month:parts.year+'-'+parts.month,day:Number(parts.day),hour:Number(parts.hour),weekday:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(parts.weekday)};
 }
 const friendlyDate=s=>new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',weekday:'short',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(s));
-const eventLink=id=>'https://divisionivmasons.org/calendar/?event='+encodeURIComponent(id)+'#events-list';
+const eventLink=id=>'https://dev.norcalmasons.org/calendar/?event='+encodeURIComponent(id)+'#events-list';
 async function weeklyIssue(settings:any) {
  const now=new Date(), window=weeklyWindow(now);
  const since=new Date(now.getTime()-7*86400000).toISOString();
@@ -147,11 +150,11 @@ async function weeklyIssue(settings:any) {
   intro:'Your Division IV week ahead: verified calendar events, regularly scheduled lodge stated meetings, and new events submitted during the past seven days and published after verification.',
   content:built.htmlContent,
   actionText:'View the Division IV Calendar',
-  actionUrl:'https://divisionivmasons.org/calendar/',
+  actionUrl:'https://dev.norcalmasons.org/calendar/',
   finePrint:'Stated meetings can change; confirm with the lodge before attending. Saved personal-calendar copies do not automatically update when event details change.',
   unsubscribe:true
  });
- const text=[label,built.textBody,'View the Division IV Calendar: https://divisionivmasons.org/calendar/',
+ const text=[label,built.textBody,'View the Division IV Calendar: https://dev.norcalmasons.org/calendar/',
   'Unsubscribe: {{{RESEND_UNSUBSCRIBE_URL}}}'].join('\n\n');
  return {kind:'weekly',subject,html,text,groups:built.groups,versions:built.versions,items:built.items};
 }
@@ -206,11 +209,11 @@ async function issue(kind:string,settings:any){
   content:section('New events',groups.new)+section('Updated events',groups.updated)+section('Cancelled events',groups.cancelled)+section('Upcoming events',groups.upcoming)+
    (!list.length?'<p style="margin:18px 0;color:#33475b;font-size:14px;line-height:1.7">No published events are currently listed for this period.</p>':''),
   actionText:'View the Division IV Calendar',
-  actionUrl:'https://divisionivmasons.org/calendar/',
+  actionUrl:'https://dev.norcalmasons.org/calendar/',
   finePrint:'Saved personal-calendar copies do not automatically update when event details change. Please check the online calendar before attending.',
   unsubscribe:true
  });
- const text=[label,'Division IV calendar: https://divisionivmasons.org/calendar/',...Object.entries(groups).flatMap(([name,items])=>items.length?[name.toUpperCase(),...items.map((e:any)=>e.title+' — '+friendlyDate(e.starts_at)+' — '+eventLink(e.id))]:[]),'Unsubscribe: {{{RESEND_UNSUBSCRIBE_URL}}}'].join('\n\n');
+ const text=[label,'Division IV calendar: https://dev.norcalmasons.org/calendar/',...Object.entries(groups).flatMap(([name,items])=>items.length?[name.toUpperCase(),...items.map((e:any)=>e.title+' — '+friendlyDate(e.starts_at)+' — '+eventLink(e.id))]:[]),'Unsubscribe: {{{RESEND_UNSUBSCRIBE_URL}}}'].join('\n\n');
  return {kind,subject,html,text,groups,versions,items:list.length};
 }
 async function subscribe(req:Request,settings:any){
@@ -232,7 +235,7 @@ async function subscribe(req:Request,settings:any){
  const token=crypto.randomUUID()+crypto.randomUUID(),token_hash=await hash(token);
  const {error}=await db.from('newsletter_subscribers').upsert({email,status:'pending',token_hash,token_expires_at:new Date(Date.now()+48*3600000).toISOString(),requested_at:new Date().toISOString(),last_confirmation_sent_at:new Date().toISOString()},{onConflict:'email'});
  if(error)throw Error('Unable to create signup request');
- const link='https://divisionivmasons.org/?newsletter_confirm='+encodeURIComponent(token)+'#newsletter-signup';
+ const link='https://dev.norcalmasons.org/?newsletter_confirm='+encodeURIComponent(token)+'#newsletter-signup';
  const reply=await resend('/emails','POST',{from:fromEnv(),to:[email],subject:'Confirm your Division IV newsletter subscription',html:confirmationHtml(link),text:'Confirm your subscription to the Division IV Events Newsletter:\n'+link+'\n\nThis link expires in 48 hours. If you did not request this, ignore the message.'},'transactional');
  if(!reply?.id)throw Error('Confirmation email could not be sent');
  return {message:'If this address is eligible, please check your inbox for a confirmation link.'};
@@ -347,6 +350,7 @@ Deno.serve(async(req:Request)=>{
  if(req.method==='OPTIONS')return new Response(null,{status:204,headers:{'access-control-allow-origin':origins.has(origin)?origin:'null','access-control-allow-headers':'authorization,content-type,apikey,x-newsletter-secret','access-control-allow-methods':'GET,POST','vary':'Origin'}});
  if(origin&&!origins.has(origin))return resp({error:'Origin not permitted'},403,origin);
  const action=new URL(req.url).searchParams.get('action')||'status';
+ if(['subscribe','confirm','cron','send-now','save'].includes(action))return resp({error:'Newsletter changes and delivery disabled in NorCal Dev'},403,origin);
  try{
   if(action==='status'&&req.method==='GET'){const s=await config();return resp({signup_enabled:!!(s.signup_enabled&&s.free_plan_confirmed&&s.resend_segment_id&&marketingKey()&&key()&&fromEnv())},200,origin);}
   if(action==='subscribe'&&req.method==='POST')return resp(await subscribe(req,await config()),200,origin);
