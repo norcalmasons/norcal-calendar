@@ -2,7 +2,7 @@
 (()=>{
   const root=document.getElementById('public-events-results');
   if(!root)return;
-  const api='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-upcoming-events';
+  const api='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-upcoming-events';
   const zone='America/Los_Angeles';
   const filters=['event-type-filter','event-lodge-filter','event-district-filter','event-date-filter'].map(x=>document.getElementById(x));
   const [typeInput,lodgeInput,districtInput,dateInput]=filters;

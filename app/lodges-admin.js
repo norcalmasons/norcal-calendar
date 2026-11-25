@@ -1,6 +1,6 @@
 /* Division IV: dedicated lodge directory. View for inspectors, edit for administrators. */
 (()=>{
- const apiRoot='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-lodges';
+ const apiRoot='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-lodges';
  const el=id=>document.getElementById(id);
  const fields=['lodge_name','lodge_number','abbreviation','district','state','address_line1','city','county','meeting_day','meeting_time','meeting_notes','official_url'];
  let rows=[],districts=[],selected=null,loading=false,canEdit=false;

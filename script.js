@@ -1,14 +1,14 @@
 /* Division IV public-site navigation, settings and live calendar. */
 (()=>{
- const endpoint='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-site-settings?action=public';
- const baseCalendar='dd8692800e837b4dd367c15738ed95f5fd198e95a30e9d7f1afb98ac3aa3fea5@group.calendar.google.com';
+ const endpoint='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-site-settings?action=public';
+ const baseCalendar='';
  const base={
   calendar_id:baseCalendar,calendar_timezone:'America/Los_Angeles',
-  website_event_request_url:'https://divisionivmasons.org/events/',
-  website_inspector_desk_url:'https://divisionivmasons.org/inspectors/',
+  website_event_request_url:'https://dev.norcalmasons.org/events/',
+  website_inspector_desk_url:'https://dev.norcalmasons.org/inspectors/',
   website_grand_lodge_url:'https://member.freemason.org/public_lodges/search',
-  website_calendar_fallback_url:'https://divisionivmasons.org/calendar/',
-  website_site_url:'https://divisionivmasons.org',
+  website_calendar_fallback_url:'https://dev.norcalmasons.org/calendar/',
+  website_site_url:'https://dev.norcalmasons.org',
   website_navigation:[
    {group:'division',label:'About Division IV',href:'index.html#about'},
    {group:'division',label:'Install App',href:'/#install-app'},
@@ -37,9 +37,7 @@
   if(typeof value==='string'&&value.startsWith('index.html#'))return '/'+value.slice('index.html'.length);
   if(value==='calendar.html')return '/calendar/';
   if(value==='lodges.html')return '/lodges/';
-  if(value==='https://calendar.divisionivmasons.org/')return group==='inspectors'?'/inspectors/':'/events/';
-  if(value==='https://calendar.divisionivmasons.org/calendar.html')return '/calendar/';
-  if(typeof value==='string'&&value.startsWith('https://headless-odfdmxtmddz-scottyjchristian-1410.wix-site-host.com'))return value.endsWith('/lodges.html')?'/lodges/':value.endsWith('/calendar.html')?'/calendar/':'/';
+
   if(typeof value==='string'&&value.startsWith('/')&&!value.startsWith('//'))return value;
   return validHttps(value);
  };
@@ -138,18 +136,7 @@
   activeGroups=[...nav.querySelectorAll('.nav-group')];
  }
  function applyLinkSettings(s){
-  document.querySelectorAll('a[href]').forEach(a=>{
-   const href=a.getAttribute('href');
-   if(href==='https://calendar.divisionivmasons.org/'){
-    const isInspector=!!a.closest('#inspectors')||/inspector|sign.?in|desk/i.test(a.textContent);
-    const dest=validHttps(isInspector?s.website_inspector_desk_url:s.website_event_request_url);
-    if(dest)a.href=dest;
-   }else if(href==='https://member.freemason.org/public_lodges/search'){
-    const dest=validHttps(s.website_grand_lodge_url);if(dest)a.href=dest;
-   }else if(href==='https://calendar.divisionivmasons.org/calendar.html'){
-    const dest=validHttps(s.website_calendar_fallback_url);if(dest)a.href=dest;
-   }
-  });
+  document.querySelectorAll('a[href="https://member.freemason.org/public_lodges/search"]').forEach(a=>{const dest=validHttps(s.website_grand_lodge_url);if(dest)a.href=dest;});
  }
  function calendarUrl(s,mode){
   const url=new URL('https://calendar.google.com/calendar/embed');
@@ -162,6 +149,10 @@
  function applyCalendar(s){
   const frame=document.querySelector('.calendar-embed iframe');
   if(!frame)return;
+  const configured=typeof s.calendar_id==='string'&&s.calendar_id.includes('@');
+  const classic=document.getElementById('classic-calendar'),subscriptions=document.querySelector('.calendar-subscriptions');
+  if(classic)classic.hidden=!configured;if(subscriptions)subscriptions.hidden=!configured;
+  if(!configured){frame.removeAttribute('src');return;}
   const selected=userMode||(small.matches?'AGENDA':'MONTH');
   const url=calendarUrl(s,selected);
   if(frame.getAttribute('src')!==url)frame.setAttribute('src',url);
@@ -183,9 +174,9 @@
   const feed='https://calendar.google.com/calendar/ical/'+id+'/public/basic.ics';
   document.querySelectorAll('a[href]').forEach(a=>{
    const v=a.getAttribute('href')||'';
-   if(v.startsWith('https://calendar.google.com/calendar/u/0/r?cid='))a.href=google;
-   else if(v.startsWith('webcal://calendar.google.com/calendar/ical/'))a.href='webcal://calendar.google.com/calendar/ical/'+id+'/public/basic.ics';
-   else if(v.startsWith('https://calendar.google.com/calendar/ical/'))a.href=feed;
+   if(a.dataset.calendarSubscription==='google')a.href=google;
+   else if(a.dataset.calendarSubscription==='webcal')a.href='webcal://calendar.google.com/calendar/ical/'+id+'/public/basic.ics';
+   else if(a.dataset.calendarSubscription==='ics')a.href=feed;
   });
  }
  function render(s){

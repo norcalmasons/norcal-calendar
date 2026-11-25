@@ -5,7 +5,7 @@
  const params=new URL(location.href).searchParams;
  const token=params.get('newsletter_confirm');
  if(!form&&!token)return;
- const base='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-newsletter';
+ const base='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-newsletter';
  const status=document.getElementById('division-newsletter-status');
  if(!status)return;
  const button=form?.querySelector('button[type="submit"]');

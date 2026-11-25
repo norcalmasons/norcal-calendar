@@ -1,7 +1,7 @@
 /* Division IV administrator website settings and inspector calendar sync overview. */
 (()=>{
  const e=id=>document.getElementById(id);
- const endpoint='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-site-settings';
+ const endpoint='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-site-settings';
  const settingNames=['website_site_url','website_event_request_url','website_inspector_desk_url',
   'website_grand_lodge_url','website_calendar_fallback_url','calendar_id','calendar_timezone'];
  const groups=[['division','Division'],['lodges','Lodges'],['calendar','Calendar']];

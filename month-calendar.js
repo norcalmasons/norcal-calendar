@@ -3,7 +3,7 @@
 (()=>{
   const root=document.getElementById('month-days');
   if(!root)return;
-  const api='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-upcoming-events';
+  const api='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-upcoming-events';
   const zone='America/Los_Angeles';
   const $=id=>document.getElementById(id);
   const monthPicker=$('month-picker'),title=$('month-browser-heading');

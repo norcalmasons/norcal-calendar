@@ -1,7 +1,7 @@
 /* Dependency-free auth: the login button must not depend on a third-party CDN. */
-const ROOT='https://lxvceqshpjnjjlllbpaq.supabase.co';
-const KEY='sb_publishable_8wAnbhewmF5a0E2IRUaPhA_swWBgUm_';
-const AUTH_STORAGE='division-iv-calendar-session-v1';
+const ROOT='https://ltowvwvryodzrxtpattd.supabase.co';
+const KEY='sb_publishable_XhQsebuVxOUWkEqQpfWgsg_1tIZPmQL';
+const AUTH_STORAGE='norcal-dev-calendar-session-v1';
 const authEvents=new Set();
 let currentSession=null;
 try{currentSession=JSON.parse(localStorage.getItem(AUTH_STORAGE)||'null')}catch{currentSession=null}
@@ -704,7 +704,7 @@ async function showCoordinationAdvisory(host,fields,currentEventId){
   return;
  }
  try{
-  const url='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-upcoming-events?month='+encodeURIComponent(start.slice(0,7));
+  const url='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-upcoming-events?month='+encodeURIComponent(start.slice(0,7));
   const response=await fetch(url,{headers:{Accept:'application/json'},cache:'no-store'});
   if(!response.ok)throw Error('Public calendar unavailable');
   const data=await response.json();
