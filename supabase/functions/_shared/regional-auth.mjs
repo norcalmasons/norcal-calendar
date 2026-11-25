@@ -30,7 +30,7 @@ export function jwtClaims(token) {
  } catch { return null; }
 }
 
-export async function lookupIdentity(db, req) {
+export async function lookupIdentity(db, req, { regional = false } = {}) {
  const token=(req.headers.get('authorization')||'').match(/^Bearer\s+(\S+)$/i)?.[1]||'';
  const empty={email:'',user:null,staff:null,token:''};
  if(!token)return empty;
@@ -41,7 +41,7 @@ export async function lookupIdentity(db, req) {
  const {data:staff,error:lookup}=await db.from('staff_accounts').select('id,email,display_name,role,enabled,removed_at,phone,district,regional_role,division_id').eq('email',email).eq('enabled',true).is('removed_at',null).maybeSingle();
  if(lookup)throw Error('Unable to verify staff authorization. Try again.');
  // During migration, only system admins can access unscoped legacy handlers.
- return {email,user,staff:legacyAllowed(staff)?staff:null,token};
+ return {email,user,staff:(regional ? !!roleScope(staff) : legacyAllowed(staff))?staff:null,token};
 }
 
 export async function staffMfaState(db,user,token) {
@@ -65,3 +65,21 @@ export async function requireLegacyStaff(db,req) {
  await requireMfa(db,a.user,a.token);
  return a.staff;
 }
+
+ // Use only in handlers whose reads and writes have been division-scoped.
+ export async function requireRegionalAdmin(db,req) {
+  const a=await lookupIdentity(db,req,{regional:true});
+  const scope=roleScope(a.staff);
+  if(!scope||!['system_admin','division_admin'].includes(scope.role))throw Error('Administrator access required');
+  await requireMfa(db,a.user,a.token);
+  if(scope.divisionId!==null){
+   const {data,error}=await db.from('divisions').select('id,onboarded').eq('id',scope.divisionId).eq('onboarded',true).maybeSingle();
+   if(error||!data)throw Error('Administrator division is not available');
+  }
+  return {...a.staff,scope};
+ }
+ export function scopeQuery(query,scope) {
+  if(scope?.role==='system_admin'&&scope.divisionId===null)return query;
+  if(!['division_admin','inspector'].includes(scope?.role)||!Number.isInteger(scope.divisionId)||scope.divisionId<=0)throw Error('Administrator division is required');
+  return query.eq('division_id',scope.divisionId);
+ }
