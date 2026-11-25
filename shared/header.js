@@ -1,4 +1,4 @@
-/* Shared Division IV header include.
+/* Shared NorCal header include.
  * One identity, public navigation, and mobile menu for every website section.
  * Load with defer BEFORE the public and inspector application scripts.
  */
@@ -17,11 +17,11 @@
  const current=on=>on?' aria-current="page"':'';
  const brand=[
  '<div class="division-brand">',
- ' <a class="brand-home" href="/" aria-label="Division IV Masons — home">',
- '  <img class="brand-emblem" src="/app/assets/division-iv-emblem.png?v=20261028b" width="76" height="76" alt="Division IV Masons emblem">',
+ ' <a class="brand-home" href="/" aria-label="Northern California Masons — home">',
+ '  <img class="brand-emblem" src="/app/assets/division-iv-emblem.png?v=20261125a" width="76" height="76" alt="Northern California Masons emblem">',
  ' </a>',
  ' <div class="brand-copy">',
- '  <a class="brand-name" href="/">Division IV Masons</a>',
+ '  <a class="brand-name" href="/">Northern California Masons</a>',
  '  <a class="brand-affiliation" href="https://freemason.org/" target="_blank" rel="noopener noreferrer" aria-label="Grand Lodge of California — official website">Grand Lodge of California</a>',
  ' </div>',
  '</div>'].join('');
