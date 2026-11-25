@@ -6,7 +6,7 @@ const esc=value=>txt(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'
 const pretty=instant=>new Intl.DateTimeFormat('en-US',{
  timeZone:'America/Los_Angeles',weekday:'short',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'
 }).format(new Date(instant));
-const eventUrl=id=>'https://divisionivmasons.org/calendar/?event='+encodeURIComponent(id)+'#events-list';
+const eventUrl=id=>'https://dev.norcalmasons.org/calendar/?event='+encodeURIComponent(id)+'#events-list';
 const table=items=>'<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse">'+items.join('')+'</table>';
 const heading=(title,items,empty)=>'<h2 style="color:#0b2138;font-family:Georgia,Times New Roman,serif;font-size:21px;font-weight:normal;margin:28px 0 10px">'+esc(title)+'</h2>'+
  (items.length?table(items):'<p style="color:#667483;font-size:14px;line-height:1.7">'+esc(empty)+'</p>');

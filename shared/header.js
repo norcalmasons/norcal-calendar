@@ -66,5 +66,10 @@
  inner.className='division-header-inner';
  inner.innerHTML=brand+publicNavigation+tools;
  target.replaceChildren(inner);
+ // Visible warning on every development page, including Inspector Desk.
+ const banner=document.createElement('div');
+ banner.setAttribute('role','status');banner.textContent='NORCAL DEVELOPMENT — Division IV test data. No live publication or notifications.';
+ banner.style.cssText='background:#f4df9e;color:#172636;text-align:center;padding:7px 12px;font:600 12px/1.35 system-ui,sans-serif;';
+ target.before(banner);
  target.dataset.headerReady='true';
 })();
