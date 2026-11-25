@@ -1,3 +1,4 @@
+import { lookupIdentity, staffMfaState as regionalMfaState, requireMfa } from '../_shared/regional-auth.mjs';
 // Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
 if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2';
@@ -27,15 +28,7 @@ const goodEmail=(x:unknown)=>typeof x==='string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const clean=(s:unknown,n=1000)=>typeof s==='string'?s.trim().slice(0,n):'';
 const localOk=(v:unknown)=>typeof v==='string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(v) && !Number.isNaN(Date.parse(v));
 const parseUrl=(v:unknown)=>{const s=clean(v,1000);if(!s)return '';try{const x=new URL(s);return ['https:','http:'].includes(x.protocol)?x.href:'';}catch{return ''}};
-async function auth(req:Request){
- const token=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');
- if(!token)return {email:'',user:null,staff:null};
- const {data,error}=await db.auth.getUser(token);
- if(error||!data.user?.email) return {email:'',user:null,staff:null};
- const email=data.user.email.toLowerCase();
- const {data:staff}=await db.from('staff_accounts').select('id,email,display_name,role,enabled,phone').eq('email',email).eq('enabled',true).is('removed_at',null).maybeSingle();
- return {email,user:data.user,staff:staff||null,token};
-}
+async function auth(req:Request){return await lookupIdentity(db,req)}
 async function setting(k:string, fallback:any){const {data}=await db.from('system_settings').select('setting_value').eq('setting_key',k).maybeSingle();return data?.setting_value??fallback}
 function sanitize(p:any,patch=false,allowOverride=false){
  const obj:Record<string,unknown>={};
@@ -90,27 +83,8 @@ async function eventForCode(c:string){
  const {data:event}=await db.from('events').select('*').eq('id',r.approved_event_id).maybeSingle();
  return event;
 }
-async function staffMfaState(user:any,token:string){
- if(!user?.id)throw Error('Authenticated user could not be verified for MFA.');
- const {data,error}=await db.auth.admin.mfa.listFactors({userId:user.id});
- if(error||!Array.isArray(data?.factors)){
-  console.error('Administrator MFA enrollment lookup failed',error?.message||'Unexpected response');
-  throw Error('Unable to verify staff MFA status. Try again.');
- }
- const factor=data.factors.find((f:any)=>f?.status==='verified'&&['totp','phone'].includes(f.factor_type));
- if(!factor)return {required:true,verified:false,needsEnrollment:true};
- const factorId=String(factor.id||'');
- try{
-  const middle=token.split('.')[1]||'';
-  const claims=JSON.parse(atob(middle.replace(/-/g,'+').replace(/_/g,'/')));
-  if(claims.aal==='aal2'&&claims.sub===user.id)return {required:true,verified:true,factorId};
- }catch{}
- return {required:true,verified:false,factorId};
-}
-async function verifiedMfaRequired(user:any,token:string){
- const state=await staffMfaState(user,token);
- if(state.required&&!state.verified)throw Error(state.needsEnrollment?'Set up an authenticator in Account security before using the Inspector Desk.':'Complete authenticator verification in Account security before accessing the Inspector Desk.');
-}
+async function staffMfaState(user:any,token:string){return await regionalMfaState(db,user,token)}
+async function verifiedMfaRequired(user:any,token:string){return await requireMfa(db,user,token)}
 function requiredStaff(a:any){if(!a.staff)throw Error('Inspector login required or account disabled');return a.staff}
 function requiredAdmin(a:any){const s=requiredStaff(a);if(s.role!=='admin')throw Error('Administrator access required');return s}
 Deno.serve(async req=>{

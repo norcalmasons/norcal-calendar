@@ -1,3 +1,4 @@
+import { requireLegacyStaff } from '../_shared/regional-auth.mjs';
 // Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
 if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0';
@@ -22,37 +23,7 @@ function respond(body:unknown,origin:string,status=200){
  ...(allowed.has(origin)?{'access-control-allow-origin':origin}:{})}});
 }
 function fail(msg:string,origin:string,status=400){return respond({error:msg},origin,status)}
-async function verifiedMfaRequired(user:any,token:string){
- if(!user?.id)throw Error('Authenticated user could not be verified for MFA.');
- // Auth getUser() does not guarantee the MFA enrollment list is present.
- // Server-side Auth Admin is authoritative; lookup failures must deny access.
- const {data,error}=await db.auth.admin.mfa.listFactors({userId:user.id});
- if(error||!Array.isArray(data?.factors)){
-  console.error('Administrator MFA enrollment lookup failed',error?.message||'Unexpected response');
-  throw Error('Unable to verify administrator MFA status. Try again.');
- }
- const enrolled=data.factors.some((f:any)=>f?.status==='verified'&&['totp','phone'].includes(f.factor_type));
- if(!enrolled)throw Error('Set up an authenticator in Account security before using the Inspector Desk.');
- try{
-  const middle=token.split('.')[1]||'';
-  const claims=JSON.parse(atob(middle.replace(/-/g,'+').replace(/_/g,'/')));
-  // Supabase getUser(token) already verified this JWT and identified its user.
-  if(claims.aal==='aal2'&&claims.sub===user.id)return;
- }catch{}
- throw Error('Complete the authenticator verification in Account security.');
-}
-async function actor(req:Request,admin=false){
- const token=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');
- if(!token)throw Error('Inspector sign-in required');
- const {data,error}=await db.auth.getUser(token);
- if(error||!data.user?.email)throw Error('Inspector session expired. Sign in again.');
- const {data:staff,error:err}=await db.from('staff_accounts').select('id,role,enabled,removed_at,display_name,email')
-  .eq('email',data.user.email.toLowerCase()).eq('enabled',true).is('removed_at',null).maybeSingle();
- if(err||!staff||!['admin','inspector'].includes(staff.role))throw Error('Active inspector access required');
- if(admin&&staff.role!=='admin')throw Error('Administrator access required');
- await verifiedMfaRequired(data.user,token);
- return staff;
-}
+async function actor(req:Request,admin=false){return await requireLegacyStaff(db,req)}
 const trim=(s:unknown,n:number)=>typeof s==='string'?s.trim().slice(0,n):'';
 const uuid=(s:unknown)=>typeof s==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)?s:'';
 async function getCategory(s:unknown){

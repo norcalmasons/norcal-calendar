@@ -1,3 +1,4 @@
+import { requireLegacyStaff } from '../_shared/regional-auth.mjs';
 // Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
 if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2';
@@ -14,22 +15,7 @@ const localOk=(v:string)=>/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(v)&&!Number.isNaN(D
 function urlOk(v:string){try{return ['http:','https:'].includes(new URL(v).protocol)}catch{return false}}
 function respond(data:any,status=200,origin=''){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json','cache-control':'no-store','vary':'Origin',...(origins.has(origin)?{'access-control-allow-origin':origin}:{})}})}
 function fail(error:string,status=400,origin=''){return respond({error},status,origin)}
-async function staffFor(req:Request){
- const token=t(req.headers.get('authorization')).replace(/^Bearer\s+/i,'');
- if(!token)throw Error('Inspector or administrator sign-in required.');
- const {data,error}=await db.auth.getUser(token);
- if(error||!data.user?.email)throw Error('Inspector session is not valid. Sign in again.');
- const {data:staff,error:staffError}=await db.from('staff_accounts').select('id,email,display_name,role').eq('email',data.user.email.toLowerCase()).eq('enabled',true).is('removed_at',null).maybeSingle();
- if(staffError||!staff||!['admin','inspector'].includes(staff.role))throw Error('Enabled Inspector or Administrator account required.');
- const {data:factors,error:factorError}=await db.auth.admin.mfa.listFactors({userId:data.user.id});
- if(factorError||!Array.isArray(factors?.factors))throw Error('Unable to verify account security.');
- if(!factors.factors.some((f:any)=>f.status==='verified'&&['totp','phone'].includes(f.factor_type)))throw Error('Set up MFA in Account security before importing.');
- try{
-  const claims=JSON.parse(atob((token.split('.')[1]||'').replace(/-/g,'+').replace(/_/g,'/')));
-  if(claims.aal!=='aal2'||claims.sub!==data.user.id)throw Error('Complete MFA verification before importing.');
- }catch(e){if(e instanceof Error&&e.message.includes('MFA'))throw e;throw Error('Complete MFA verification before importing.')}
- return staff;
-}
+async function staffFor(req:Request){return await requireLegacyStaff(db,req)}
 async function digest(str:string){
  const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(str));
  return Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');

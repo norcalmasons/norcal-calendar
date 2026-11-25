@@ -1,3 +1,4 @@
+import { requireLegacyStaff } from '../_shared/regional-auth.mjs';
 // Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
 if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 // Division IV correction queue. Public submissions only; every read/update requires live admin + MFA AAL2.
@@ -19,27 +20,7 @@ function reply(body:unknown,status:number,origin:string){
   return new Response(JSON.stringify(body),{status,headers});
 }
 function bad(message:string,status:number,origin:string){return reply({error:message},status,origin)}
-async function requireAdmin(req:Request){
-  const bearer=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');
-  if(!bearer)throw Error('Administrator sign-in required');
-  const {data,error}=await db.auth.getUser(bearer);
-  if(error||!data.user?.email)throw Error('Administrator session expired');
-  const {data:staff,error:staffError}=await db.from('staff_accounts')
-    .select('id,email,role,enabled,removed_at').eq('email',data.user.email.toLowerCase())
-    .eq('enabled',true).is('removed_at',null).maybeSingle();
-  if(staffError||!staff||staff.role!=='admin')throw Error('Administrator access required');
-  const {data:factors,error:factorError}=await db.auth.admin.mfa.listFactors({userId:data.user.id});
-  if(factorError||!Array.isArray(factors?.factors))throw Error('Unable to verify administrator MFA');
-  if(!factors.factors.some((f:any)=>f?.status==='verified'&&['totp','phone'].includes(f.factor_type)))
-    throw Error('An enrolled authenticator is required');
-  let payload:any={};
-  try{
-    const part=bearer.split('.')[1]||'';
-    payload=JSON.parse(atob(part.replace(/-/g,'+').replace(/_/g,'/')));
-  }catch{}
-  if(payload.aal!=='aal2'||payload.sub!==data.user.id)throw Error('Complete MFA verification to continue');
-  return staff;
-}
+async function requireAdmin(req:Request){return await requireLegacyStaff(db,req)}
 async function publicSubmission(req:Request,origin:string){
   const length=Number(req.headers.get('content-length')||0);
   if(length>6000)return bad('Request too large',413,origin);
