@@ -1,3 +1,4 @@
+import { requireLegacyStaff } from '../_shared/regional-auth.mjs';
 // Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
 if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 
@@ -88,19 +89,7 @@ async function resend(path:string,method='GET',body?:unknown,mode:'marketing'|'t
  if(!r.ok)throw Error('Resend '+r.status+': '+message(data?.message||data?.name||'Request rejected').slice(0,160));
  return data;
 }
-async function admin(req:Request){
- const token=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');
- if(!token)throw Error('Admin sign-in required');
- const {data:{user},error}=await db.auth.getUser(token);
- if(error||!user?.email)throw Error('Invalid admin session');
- const {data:staff}=await db.from('staff_accounts').select('id,email,role,enabled,removed_at').eq('email',user.email.toLowerCase()).eq('role','admin').eq('enabled',true).is('removed_at',null).maybeSingle();
- if(!staff)throw Error('Admin account required');
- const {data:factors,error:factorError}=await db.auth.admin.mfa.listFactors({userId:user.id});
- if(factorError||!factors?.factors?.some((f:any)=>f.status==='verified'&&['totp','phone'].includes(f.factor_type)))throw Error('Verified authenticator required');
- const claims=JSON.parse(atob((token.split('.')[1]||'').replace(/-/g,'+').replace(/_/g,'/')));
- if(claims.sub!==user.id||claims.aal!=='aal2')throw Error('Complete authenticator verification');
- return staff;
-}
+async function admin(req:Request){return await requireLegacyStaff(db,req)}
 function localParts(date=new Date()){
  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit',weekday:'short',hour:'2-digit',hourCycle:'h23'}).formatToParts(date).map(x=>[x.type,x.value]));
  return {month:parts.year+'-'+parts.month,day:Number(parts.day),hour:Number(parts.hour),weekday:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(parts.weekday)};

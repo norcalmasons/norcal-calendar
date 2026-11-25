@@ -1,3 +1,4 @@
+import { requireLegacyStaff } from '../_shared/regional-auth.mjs';
 // Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
 if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0';
@@ -32,36 +33,7 @@ function reply(body:unknown,status:number,origin:string){
  return new Response(JSON.stringify(body),{status,headers});
 }
 function fail(message:string,status:number,origin:string){return reply({error:message},status,origin);}
-async function verifiedMfaRequired(user:any,token:string){
- if(!user?.id)throw Error('Authenticated user could not be verified for MFA.');
- // Auth getUser() does not guarantee the MFA enrollment list is present.
- // Server-side Auth Admin is authoritative; lookup failures must deny access.
- const {data,error}=await db.auth.admin.mfa.listFactors({userId:user.id});
- if(error||!Array.isArray(data?.factors)){
-  console.error('Administrator MFA enrollment lookup failed',error?.message||'Unexpected response');
-  throw Error('Unable to verify administrator MFA status. Try again.');
- }
- const enrolled=data.factors.some((f:any)=>f?.status==='verified'&&['totp','phone'].includes(f.factor_type));
- if(!enrolled)throw Error('Set up an authenticator in Account security before using the Inspector Desk.');
- try{
-  const middle=token.split('.')[1]||'';
-  const claims=JSON.parse(atob(middle.replace(/-/g,'+').replace(/_/g,'/')));
-  // Supabase getUser(token) already verified this JWT and identified its user.
-  if(claims.aal==='aal2'&&claims.sub===user.id)return;
- }catch{}
- throw Error('Complete the authenticator verification in Account security.');
-}
-async function requireAdmin(req:Request){
- const bearer=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');
- if(!bearer)throw Error('Administrator sign-in required');
- const {data,error}=await db.auth.getUser(bearer);
- if(error||!data.user?.email)throw Error('Session expired. Please sign in again.');
- const {data:staff,error:lookup}=await db.from('staff_accounts').select('id,role,enabled,removed_at')
-  .eq('email',data.user.email.toLowerCase()).eq('enabled',true).is('removed_at',null).maybeSingle();
- if(lookup||!staff||staff.role!=='admin')throw Error('Administrator access required');
- await verifiedMfaRequired(data.user,bearer);
- return staff;
-}
+async function requireAdmin(req:Request){return await requireLegacyStaff(db,req)}
 async function getSettings(){
  const {data,error}=await db.from('system_settings').select('setting_key,setting_value').in('setting_key',keys);
  if(error)throw Error('Website settings are unavailable');
