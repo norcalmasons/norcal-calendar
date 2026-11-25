@@ -26,3 +26,11 @@ This is preparation, not a verified backup, restored database, or production-rea
 ## Development restoration
 
 A schema-only baseline has been applied to NorCal Dev and recorded under `supabase/migrations/`. A second migration explicitly aligns all 18 UUID defaults to the PostgreSQL built-in generator. Historical migrations remain reference-only. No source rows, storage objects, auth users, secrets, cron or network extensions were copied. The legacy direct anon/authenticated grants were revoked. Platform-provided functions and catalog-managed metadata are not recreated. Table/column comments and storage configuration require a separate check.
+
+## Verified catalog comparison (2026-11-25)
+
+Source and target each have 557 compared objects: 320 columns (including the view), 123 constraints, 63 indexes, 19 application functions, 5 triggers, 1 view and 26 RLS states. After aligning 18 UUID defaults, 555 definitions match exactly. The two remaining check constraints (`inspector_resource_category_name_check` and `poc_positions_title_valid`) differ only in redundant AND-expression grouping, with equivalent conditions. No objects are missing or extra in these categories. Catalog comments, platform metadata, and full runtime behavior were not compared.
+
+Target contains zero events, staff accounts, authentication users, subscribers, calendar jobs, email jobs or buckets. No pg_cron or pg_net extension installed; no deployed application functions. No direct public/anon/authenticated table or routine grants. Security advisor reports only 26 informational RLS-without-policies findings, expected under the current deny-by-default service-role gateway. This is not yet a multi-division authorization audit.
+
+Next: seed safe reference data, reconfigure frontend and Edge Functions for Dev, create isolated test accounts and verify functional behavior; keep all delivery and publication disabled.
