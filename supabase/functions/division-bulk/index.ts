@@ -31,16 +31,19 @@ function normalizedTitle(title:string,host:string){
  if(value.startsWith(start))value=value.slice(start.length).trim();
  return value;
 }
-function matchKey(p:any){return [t(p.hosted_by).toLowerCase(),t(p.event_type).toLowerCase(),t(p.start_local).slice(0,10),normalizedTitle(p.title,p.hosted_by)].join('|')}
-async function context(){
- const [l,tps,ds,events,requests]=await Promise.all([
-  db.from('lodges').select('lodge_name,lodge_number,district,abbreviation').eq('active',true),
+function matchKey(p:any){return [String(p.division_id||4),t(p.hosted_by).toLowerCase(),t(p.event_type).toLowerCase(),t(p.start_local).slice(0,10),normalizedTitle(p.title,p.hosted_by)].join('|')}
+async function context(staff:any){
+ const {data:scope,error:scopeError}=await db.rpc('regional_event_divisions',{p_staff:staff.id,p_requested:null,p_admin_only:false});
+ if(scopeError||!Array.isArray(scope)||!scope.length)throw Error('No authorized divisions available');
+ const [l,tps,ds,events,requests,divisions]=await Promise.all([
+  db.from('lodges').select('lodge_name,lodge_number,district,abbreviation,division_id,address_line1,city,state').in('division_id',scope).eq('active',true),
   db.from('event_types').select('label').eq('enabled',true),
-  db.from('system_settings').select('setting_value').eq('setting_key','district_numbers').maybeSingle(),
-  db.from('events').select('title,event_type,hosted_by,starts_at,event_code').eq('status','active').order('starts_at',{ascending:false}).limit(1500),
-  db.from('event_requests').select('request_code,proposed_fields,status,idempotency_key').eq('request_type','new').in('status',['pending','needs_correction','approved']).order('submitted_at',{ascending:false}).limit(1500)
+  db.from('districts').select('district_code,division_id').in('division_id',scope).eq('active',true),
+  db.from('events').select('division_id,title,event_type,hosted_by,starts_at,event_code').in('division_id',scope).eq('status','active').order('starts_at',{ascending:false}).limit(1500),
+  db.from('event_requests').select('division_id,request_code,proposed_fields,status,idempotency_key').in('division_id',scope).eq('request_type','new').in('status',['pending','needs_correction','approved']).order('submitted_at',{ascending:false}).limit(1500),
+  db.from('divisions').select('id,name').in('id',scope).eq('onboarded',true)
  ]);
- for(const result of [l,tps,ds,events,requests])if(result.error)throw Error('Unable to validate the spreadsheet against current calendar records: '+result.error.message);
+ for(const result of [l,tps,ds,events,requests,divisions])if(result.error)throw Error('Unable to validate the spreadsheet against current calendar records: '+result.error.message);
  const existing=new Map<string,string[]>();
  function add(key:string,label:string){existing.set(key,[...(existing.get(key)||[]),label])}
  for(const e of events.data||[]){
@@ -48,52 +51,60 @@ async function context(){
   add(key,'Published: '+e.event_code);
  }
  for(const r of requests.data||[]){
-  const p=r.proposed_fields||{};if(p.title&&p.hosted_by&&p.start_local)add(matchKey(p),'Submission: '+r.request_code+' ('+r.status+')');
+  const p=r.proposed_fields||{};if(p.title&&p.hosted_by&&p.start_local)add(matchKey({...p,division_id:r.division_id}),'Submission: '+r.request_code+' ('+r.status+')');
  }
- return {lodges:new Map((l.data||[]).map((x:any)=>[String(x.lodge_number||''),x])),
+ return {lodges:l.data||[],scope,divisions:divisions.data||[],
   types:new Set((tps.data||[]).map((x:any)=>x.label)),
-  districts:new Set((Array.isArray(ds.data?.setting_value)?ds.data.setting_value:[]).map(String)),
+  districts:new Map((ds.data||[]).map((x:any)=>[String(x.district_code),x.division_id])),
   existing};
 }
-function validated(row:any,ctx:any,staff:any){
+async function validated(row:any,ctx:any,staff:any){
  const issues:string[]=[];
  const get=(key:string)=>t(row[key]);
  const soi=get('event_type')==='Division School of Instruction';
+ const wide=soi||get('event_type')==='Division Event';
  const districtSoi=get('event_type')==='District School of Instruction';
  const rawHost=get('host_input');
  const normalize=(v:string)=>v.toLowerCase().replace(/\s+/g,' ').trim();
  const key=normalize(rawHost);
- const lodges=[...ctx.lodges.values()];
- const looksNumeric=/^(?:#|no\.?\s*)?\d{1,4}$/i.test(rawHost);
- const number=looksNumeric?rawHost.replace(/^(?:#|no\.?\s*)/i,''):null;
+ const lodges=ctx.lodges;
+ const looksNumeric=/^(?:#|(?:lodge\s+)?(?:no\.?\s*)?|lodge\s+)\d{1,4}$/i.test(rawHost);
+ const number=looksNumeric?rawHost.match(/\d+$/)?.[0]:null;
  const matched=lodges.filter((l:any)=>number?String(l.lodge_number)===number:[
   l.lodge_name,l.lodge_name+' Lodge No. '+l.lodge_number,
   l.lodge_name+' No. '+l.lodge_number,l.abbreviation
  ].some(v=>v&&normalize(v)===key));
  if(matched.length>1)issues.push('More than one lodge matches Host. Enter its lodge number instead.');
  const lodge=matched.length===1?matched[0]:null;
- if(!soi&&rawHost&&!lodge&&(looksNumeric||/\bno\.?(?:\s|$)|\blodge\b/i.test(rawHost)))
-  issues.push('Host lodge was not found. Use its number from the Lodge Lookup tab.');
- if(soi&&rawHost&&normalize(rawHost)!=='division iv')
-  issues.push('Division Schools: leave Host blank. The system uses Division IV automatically.');
- const host=soi?'Division IV':lodge?lodge.lodge_name+' Lodge No. '+lodge.lodge_number:rawHost;
- if(!host)issues.push('Enter a host (lodge number or organization), except for Division Schools.');
- const chosenDistrict=get('district_override');
- const district=soi?'':lodge?t(lodge.district):chosenDistrict;
- if(lodge&&chosenDistrict&&chosenDistrict!==district)
-  issues.push('The district does not match that lodge. Leave District blank to use its saved district.');
- if(!soi&&!ctx.districts.has(district))issues.push('Select a valid District when Host is not a lodge.');
- const p:any={hosted_by:host,district,event_mode:get('event_mode')||'in_person'};
+ if(!wide&&rawHost&&!lodge&&(looksNumeric||/\bno\.?(?:\s|$)|\blodge\b/i.test(rawHost)))issues.push('Host lodge was not found. Enter its correct lodge name or number.');
+ const divisionInput=get('division_input');
+ const selected=divisionInput?ctx.divisions.find((d:any)=>normalize(d.name)===normalize(divisionInput)||String(d.id)===divisionInput):null;
+ if(divisionInput&&!selected)issues.push('Choose an available division.');
+ const host=wide?(rawHost||selected?.name||''):lodge?lodge.lodge_name+' Lodge No. '+lodge.lodge_number:rawHost;
+ if(!host)issues.push('Enter a hosting lodge or organization.');
+ const chosenDistrict=get('district_override').replace(/^District\s+(?:No\.?\s*)?/i,'');
+ const district=wide?'':lodge?t(lodge.district):chosenDistrict;
+ if(wide&&chosenDistrict)issues.push('Leave District blank for a division-wide event.');
+ if(lodge&&chosenDistrict&&chosenDistrict!==district)issues.push('District does not match the hosting lodge.');
+ if(!wide&&!ctx.districts.has(district))issues.push('Choose an active district when the host is not a recognized lodge.');
+ let divisionId:number|null=null;
+ if(!issues.length){
+  const {data,error}=await db.rpc('regional_resolve_event_division',{p_district:district||null,p_type:get('event_type'),p_division:selected?.id??null,p_host:host});
+  if(error||!ctx.scope.includes(data))issues.push(error?.message||'Staff access required for this division.');
+  else divisionId=data;
+ }
+ const p:any={hosted_by:host,district,event_mode:get('event_mode')||'in_person',division_id:divisionId};
  for(const f of fields){
   if(f==='hosted_by'||f==='district'||f==='event_mode')continue;
   let value:any=row[f];
-  if(f==='location_tbd'){p[f]=value===true||['yes','true','1'].includes(t(value).toLowerCase());continue}
+  if(f==='location_tbd'){if(!['','yes','no','true','false','1','0'].includes(t(value).toLowerCase()))issues.push('Location TBD must be Yes or No.');p[f]=value===true||['yes','true','1'].includes(t(value).toLowerCase());continue}
   const str=t(value);const limit=(fieldLimits as any)[f]||1000;
   if(str.length>limit)issues.push(f.replaceAll('_',' ')+' exceeds '+limit+' characters.');
   p[f]=str.slice(0,limit);
  }
  for(const f of ['event_type','start_local','end_local'])if(!p[f])issues.push('Missing '+f.replaceAll('_',' ')+'.');
  if(!ctx.types.has(p.event_type))issues.push('Event type is not enabled.');
+ if(!p.public_description)issues.push('Public event description is required.');
  if(!allowedModes.has(p.event_mode))issues.push('Event format must be in_person, online or hybrid.');
  if(p.start_local&&!localOk(p.start_local))issues.push('Invalid start date/time (Pacific).');
  if(p.end_local&&!localOk(p.end_local))issues.push('Invalid end date/time (Pacific).');
@@ -108,7 +119,11 @@ function validated(row:any,ctx:any,staff:any){
   p.location_name=p.location_name||'Zoom';
   for(const f of ['location_address1','location_address2','location_city','location_state','location_zip'])p[f]='';
  }else if(!p.location_tbd){
-  for(const f of ['location_name','location_address1','location_city','location_state','location_zip'])
+  // A ZIP-only entry supplements the stored lodge address; never mix partial alternate addresses.
+  const alternate=['location_name','location_address1','location_city','location_state'].some(k=>Boolean(p[k]));
+  if(lodge&&!alternate){p.location_name=lodge.lodge_name+' Lodge No. '+lodge.lodge_number;p.location_address1=t(lodge.address_line1);p.location_city=t(lodge.city);p.location_state=t(lodge.state);}
+  if(!p.location_state)p.location_state='CA';
+  for(const f of ['location_name','location_address1','location_address2','location_city','location_state','location_zip'])
    if(!p[f])issues.push('Missing '+f.replaceAll('_',' ')+'.');
   if(p.location_state&&!/^[A-Z]{2}$/.test(p.location_state))issues.push('Use a two-letter state.');
   if(p.location_zip&&!/^\d{5}(-\d{4})?$/.test(p.location_zip))issues.push('Use a valid ZIP code.');
@@ -117,14 +132,11 @@ function validated(row:any,ctx:any,staff:any){
  }
  if(districtSoi||soi)p.event_name='School of Instruction';
  else if(!p.event_name)issues.push('Event Name is required for ordinary events. Enter only the activity, not the lodge.');
- const preferred=lodge?t(lodge.abbreviation)||host:host;
- const name=t(p.event_name);
- const stripPrefix=(value:string,prefix:string)=>value.toLowerCase().startsWith((prefix+': ').toLowerCase())?value.slice(prefix.length+2).trim():value;
- const cleanName=stripPrefix(stripPrefix(name,preferred),host);
- p.title=districtSoi?( /^\d{3,4}$/.test(district)?'District '+district+' School of Instruction':'' )
-  :soi?'Division IV School of Instruction'
-  :preferred+': '+cleanName;
- if(p.title.length>180)issues.push('Final calendar title exceeds 180 characters.');
+ if(divisionId&&!issues.length){
+  const {data,error}=await db.rpc('regional_resolve_calendar_title',{p_division:divisionId,p_event_name:p.event_name||null,p_hosted_by:host,p_event_type:p.event_type,p_district:district||null,p_override:null,p_fallback:null});
+  if(error)issues.push(error.message);else p.title=data;
+ }
+ p.title=p.title||'';
  const requesterName=get('requester_name')||staff.display_name||staff.email;
  const requesterEmail=(get('requester_email')||staff.email).toLowerCase();
  const requesterPhone=get('requester_phone');
@@ -132,12 +144,12 @@ function validated(row:any,ctx:any,staff:any){
  if(requesterName.length>150||requesterPhone.length>50||get('requester_message').length>2000)issues.push('Submitter information exceeds length limits.');
  const calendarTitle=p.title;
  return {row_number:Number(row.row_number),p,requester_name:requesterName,requester_email:requesterEmail,requester_phone:requesterPhone,requester_message:get('requester_message'),
-  host,calendar_title:calendarTitle,issues};
+  host,calendar_title:calendarTitle,division_id:divisionId,division_name:ctx.divisions.find((d:any)=>d.id===divisionId)?.name||'',location_summary:p.location_tbd?'Location TBD':p.event_mode==='online'?'Online': [p.location_name,p.location_address1,p.location_address2,p.location_city,p.location_state,p.location_zip].filter(Boolean).join(', '),issues};
 }
 async function inspect(rows:any[],staff:any){
- const ctx=await context(),seen=new Map<string,number>(),out:any[]=[];
+ const ctx=await context(staff),seen=new Map<string,number>(),out:any[]=[];
  for(const row of rows){
-  const item:any=validated(row,ctx,staff);
+  const item:any=await validated(row,ctx,staff);
   const key=matchKey(item.p);item.fingerprint=await digest(key);
   const warnings:string[]=[];
   const exact=ctx.existing.get(key)||[];
@@ -156,7 +168,7 @@ function inputRows(body:any){
  const numbers=new Set<number>();
  for(const row of body.rows){
   if(!row||typeof row!=='object'||Array.isArray(row))throw Error('Invalid event row.');
-  const n=Number(row.row_number);if(!Number.isInteger(n)||n<3||n>500||numbers.has(n))throw Error('Invalid or repeated spreadsheet row number.');
+  const n=Number(row.row_number);if(!Number.isInteger(n)||n<12||n>36||numbers.has(n))throw Error('Invalid or repeated spreadsheet row number.');
   numbers.add(n);
  }
  return body.rows;
@@ -180,20 +192,24 @@ Deno.serve(async req=>{
   if(!/\.xlsx$/i.test(filename))throw Error('An Excel .xlsx file is required.');
   const confirmations=new Set((Array.isArray(body.confirmed_rows)?body.confirmed_rows:[]).map(Number));
   const items=await inspect(rows,staff);
+  if(items.some(x=>x.status==='invalid'))throw Error('Correct every invalid row before submitting. No events were saved.');
+  const divisionIds=[...new Set(items.map(x=>x.division_id))];
+  if(divisionIds.length!==1)throw Error('During development, use one division per workbook. Mixed-division batches will be enabled after batch ownership conversion.');
+  const divisionId=divisionIds[0];
   const hash=await digest(JSON.stringify({rows,confirmed_rows:[...confirmations].filter(Number.isInteger).sort((a,b)=>a-b)}));
-  const batchKey=staff.id+':'+hash;
+  const batchKey=staff.id+':'+divisionId+':'+hash;
   const {data:existing,error:existingError}=await db.from('bulk_event_imports').select('*').eq('batch_key',batchKey).maybeSingle();
   if(existingError)throw Error(existingError.message);
   if(existing){
    if(existing.status!=='completed')return respond({error:'This spreadsheet is already being processed. Try refreshing the results before submitting again.'},409,origin);
    return respond({ok:true,replayed:true,batch_id:existing.id,results:existing.results,submitted:existing.submitted_count,skipped:existing.skipped_count,errors:existing.error_count},200,origin);
   }
-  const {data:batch,error:batchError}=await db.from('bulk_event_imports').insert({batch_key:batchKey,filename,importer_staff_id:staff.id,importer_email:staff.email,source_count:rows.length}).select('id').single();
+  const {data:batch,error:batchError}=await db.from('bulk_event_imports').insert({division_id:divisionId,batch_key:batchKey,filename,importer_staff_id:staff.id,importer_email:staff.email,source_count:rows.length}).select('id').single();
   if(batchError){
    if(batchError.code==='23505')return fail('This spreadsheet is already being processed. Refresh the results before retrying.',409,origin);
    throw Error('Unable to initialize import tracking: '+batchError.message);
   }
-  const ctx=await context(),results:any[]=[];
+  const ctx=await context(staff),results:any[]=[];
   for(const row of rows){
    const inspected=items.find((v:any)=>v.row_number===Number(row.row_number));
    const base={row_number:row.row_number,title:inspected?.calendar_title||t(row.event_name),host:inspected?.host||''};
@@ -201,11 +217,12 @@ Deno.serve(async req=>{
    if(inspected?.status==='warning'&&!confirmations.has(Number(row.row_number))){
     results.push({...base,status:'skipped',message:'Possible duplicate — not confirmed. Review and resubmit this row if intentional.'});continue
    }
-   const val=validated(row,ctx,staff);
+   const val=await validated(row,ctx,staff);
+   if(val.issues.length||val.division_id!==divisionId){results.push({...base,status:'error',message:val.issues.join(' ')||'Division changed; preview again.'});continue}
    const fingerprint=await digest(matchKey(val.p));
    const idem=confirmations.has(Number(row.row_number))&&inspected?.status==='warning'
     ?'bulk-confirm:'+batch.id+':'+row.row_number : 'bulk:'+fingerprint;
-   const code='DIV4-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase();
+   const code='DIV'+divisionId+'-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase();
    const {data,error}=await db.rpc('bulk_import_new_request',{
      p_code:code,p_fields:val.p,p_requester_name:val.requester_name,p_requester_email:val.requester_email,
      p_requester_phone:val.requester_phone,p_requester_message:val.requester_message,p_dedupe_key:idem,
@@ -219,7 +236,8 @@ Deno.serve(async req=>{
   if(doneError)throw Error('Events processed, but import summary could not be finalized: '+doneError.message);
   let notificationWarning='';
   if(submitted>0){
-   const {data:reviewers,error:reviewerError}=await db.from('staff_accounts').select('email').eq('enabled',true).is('removed_at',null);
+   const {data:members,error:memberError}=await db.from('staff_division_assignments').select('staff_id').eq('division_id',divisionId);
+   const {data:reviewers,error:reviewerError}=memberError?{data:null,error:memberError}:members?.length?await db.from('staff_accounts').select('email').in('id',members.map(x=>x.staff_id)).eq('enabled',true).is('removed_at',null):{data:[],error:null};
    if(reviewerError)notificationWarning='Inspector summary notification list could not be loaded.';
    else if(reviewers?.length){
     const mail=reviewers.map((x:any)=>({message_type:'bulk_import_summary',recipient_email:x.email,idempotency_key:'bulk-summary:'+batch.id+':'+x.email}));
