@@ -2,7 +2,7 @@
 (()=>{
  const apiRoot='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-lodges';
  const el=id=>document.getElementById(id);
- const fields=['lodge_name','lodge_number','abbreviation','district','state','address_line1','city','county','meeting_day','meeting_time','meeting_notes','official_url'];
+ const fields=['lodge_name','lodge_number','abbreviation','district','state','venue_name','address_line1','address_line2','zip_code','city','county','meeting_day','meeting_time','meeting_notes','official_url'];
  let rows=[],districts=[],selected=null,loading=false,canEdit=false;
  const container=el('lodge-admin-list'),form=el('lodge-edit-form'),panel=el('lodge-edit-panel');
  if(!container||!form||!panel)return;
@@ -83,7 +83,7 @@
    summary.replaceChildren();
    const labels=[
     ['Lodge','lodge_name'],['Number','lodge_number'],['District','district'],['Assigned inspector',null],
-    ['Street address','address_line1'],['City','city'],['County','county'],['State','state'],
+    ['Venue name','venue_name'],['Street address','address_line1'],['Address line 2','address_line2'],['ZIP code','zip_code'],['City','city'],['County','county'],['State','state'],
     ['Meeting day','meeting_day'],['Meeting time','meeting_time'],['Meeting notes','meeting_notes'],
     ['Official listing','official_url']
    ];

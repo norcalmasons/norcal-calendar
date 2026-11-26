@@ -6,7 +6,7 @@ const url = Deno.env.get('SUPABASE_URL')!;
 const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const db = createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
 const allowedOrigins = new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
-const publicFields='id,division_id,lodge_name,lodge_number,district,address_line1,city,county,state,meeting_day,meeting_time,meeting_notes,official_url,record_version,updated_at';
+const publicFields='id,division_id,lodge_name,lodge_number,district,venue_name,address_line1,address_line2,zip_code,city,county,state,meeting_day,meeting_time,meeting_notes,official_url,record_version,updated_at';
 function reply(body:unknown,status=200,origin=''){
  const headers:Record<string,string>={'content-type':'application/json; charset=utf-8','cache-control':'no-store','vary':'Origin'};
  if(allowedOrigins.has(origin))headers['access-control-allow-origin']=origin;
@@ -73,7 +73,7 @@ Deno.serve(async req=>{
       !Number.isInteger(version)||version<1||!b?.fields||typeof b.fields!=='object'||Array.isArray(b.fields))
       return error('Select a lodge and refresh before saving',400,origin);
    const fields:Record<string,string>={};
-   const permitted=['lodge_name','lodge_number','abbreviation','district','address_line1','city','county','state','meeting_day','meeting_time','meeting_notes','official_url'];
+   const permitted=['lodge_name','lodge_number','abbreviation','district','venue_name','address_line1','address_line2','zip_code','city','county','state','meeting_day','meeting_time','meeting_notes','official_url'];
    for(const [k,v] of Object.entries(b.fields)){
     if(!permitted.includes(k))return error('This lodge field cannot be edited',400,origin);
     if(typeof v!=='string'||v.length>1200)return error('Invalid value for '+k,400,origin);

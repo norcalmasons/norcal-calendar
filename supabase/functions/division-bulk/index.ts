@@ -36,7 +36,7 @@ async function context(staff:any){
  const {data:scope,error:scopeError}=await db.rpc('regional_event_divisions',{p_staff:staff.id,p_requested:null,p_admin_only:false});
  if(scopeError||!Array.isArray(scope)||!scope.length)throw Error('No authorized divisions available');
  const [l,tps,ds,events,requests,divisions]=await Promise.all([
-  db.from('lodges').select('lodge_name,lodge_number,district,abbreviation,division_id,address_line1,city,state').in('division_id',scope).eq('active',true),
+  db.from('lodges').select('lodge_name,lodge_number,district,abbreviation,division_id,venue_name,address_line1,address_line2,zip_code,city,state').in('division_id',scope).eq('active',true),
   db.from('event_types').select('label').eq('enabled',true),
   db.from('districts').select('district_code,division_id').in('division_id',scope).eq('active',true),
   db.from('events').select('division_id,title,event_type,hosted_by,starts_at,event_code').in('division_id',scope).eq('status','active').order('starts_at',{ascending:false}).limit(1500),
@@ -120,8 +120,8 @@ async function validated(row:any,ctx:any,staff:any){
   for(const f of ['location_address1','location_address2','location_city','location_state','location_zip'])p[f]='';
  }else if(!p.location_tbd){
   // A ZIP-only entry supplements the stored lodge address; never mix partial alternate addresses.
-  const alternate=['location_name','location_address1','location_city','location_state'].some(k=>Boolean(p[k]));
-  if(lodge&&!alternate){p.location_name=lodge.lodge_name+' Lodge No. '+lodge.lodge_number;p.location_address1=t(lodge.address_line1);p.location_city=t(lodge.city);p.location_state=t(lodge.state);}
+  const alternate=['location_name','location_address1','location_address2','location_city','location_state'].some(k=>Boolean(p[k]));
+  if(lodge&&!alternate){p.location_name=t(lodge.venue_name)||lodge.lodge_name+' Lodge No. '+lodge.lodge_number;p.location_address1=t(lodge.address_line1);p.location_address2=t(lodge.address_line2);p.location_city=t(lodge.city);p.location_state=t(lodge.state);p.location_zip=p.location_zip||t(lodge.zip_code);}
   if(!p.location_state)p.location_state='CA';
   for(const f of ['location_name','location_address1','location_address2','location_city','location_state','location_zip'])
    if(!p[f])issues.push('Missing '+f.replaceAll('_',' ')+'.');
