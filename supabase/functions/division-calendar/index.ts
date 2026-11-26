@@ -378,7 +378,7 @@ Deno.serve(async req=>{
    const term=clean(u.searchParams.get('search'),100).replace(/[%,()]/g,'');
    const status=clean(u.searchParams.get('status'),20);
    const pg=Math.max(0,Math.min(1000,Number(u.searchParams.get('page'))||0));
-   let q=db.from('events').select('id,event_code,title,event_type,hosted_by,district,starts_at,ends_at,status,google_event_id,calendar_last_synced_at,version,location_name,location_city',{count:'exact'}).in('division_id',scope).order('starts_at',{ascending:false});
+   let q=db.from('events').select('id,division_id,event_code,title,event_type,hosted_by,district,starts_at,ends_at,status,google_event_id,calendar_last_synced_at,version,location_name,location_city',{count:'exact'}).in('division_id',scope).order('starts_at',{ascending:false});
    if(status==='active'||status==='cancelled')q=q.eq('status',status);
    if(term)q=q.or('title.ilike.%'+term+'%,event_code.ilike.%'+term+'%,hosted_by.ilike.%'+term+'%');
    const {data,count,error}=await q.range(pg*50,pg*50+49);
