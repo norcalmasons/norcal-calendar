@@ -1015,7 +1015,7 @@ async function activateInspectorTab(key){
  if(key==='resources')await window.loadResources?.();
  if(key==='history')await loadHistory(0);
  if(key==='staff')await loadStaff();
- if(key==='divisions')await loadDivisionDirectory();
+ if(key==='divisions')await loadDivisionDirectory().catch(ex=>toast(ex.message,true));
  if(key==='newsletter')await window.loadNewsletter?.();
  if(key==='settings')await Promise.allSettled([loadSettings(),window.loadWebsiteSettings?.(),window.loadNewsletter?.()]);
 }
@@ -1267,74 +1267,91 @@ $('staff-form').onsubmit=async e=>{
  }catch(ex){formFeedback(e.target,'Inspector record not saved: '+ex.message,'error')}
  finally{busy(b,false)}
 };
-let divisionDirectoryRows=[],districtDirectoryRows=[];
-function resetDivisionDirectoryForm(){
- const form=$('division-directory-form');form.reset();form.elements.operation.value='division_created';
- form.elements.division_id.readOnly=false;
- form.elements.display_order.value=String(Math.max(0,...divisionDirectoryRows.map(d=>d.display_order))+1);
- $('division-edit-title').textContent='Add Division';formFeedback(form);
-}
-function resetDistrictDirectoryForm(divisionId=''){
- const form=$('district-directory-form');form.reset();form.elements.operation.value='district_created';
- form.elements.division_id.disabled=false;form.elements.district_code.readOnly=false;
- form.elements.division_id.value=divisionId?String(divisionId):'';
- $('district-edit-title').textContent='Add District';formFeedback(form);
+let divisionDirectoryRows=[],districtDirectoryRows=[],selectedDivisionId=null;
+function selectedDirectoryDivision(){return divisionDirectoryRows.find(d=>d.id===selectedDivisionId)}
+function directoryStatus(message='',error=false){const el=$('directory-status');el.textContent=message;el.classList.toggle('directory-error',error)}
+function showDirectoryEditor(kind){
+ $('division-editor').classList.toggle('hidden',kind!=='division');
+ $('district-editor').classList.toggle('hidden',kind!=='district');
+ $('directory-detail').classList.toggle('hidden',!!kind||!selectedDirectoryDivision());
+ $('directory-empty').classList.toggle('hidden',!!kind||!!selectedDirectoryDivision());
 }
 function directoryButton(label,callback){
  const b=document.createElement('button');b.type='button';b.className='secondary';b.textContent=label;b.onclick=callback;return b;
 }
-function editDivisionDirectory(d){
- const form=$('division-directory-form');form.elements.operation.value='division_updated';
- form.elements.division_id.value=String(d.id);form.elements.division_id.readOnly=true;
- form.elements.name.value=d.name;form.elements.display_order.value=String(d.display_order);
- $('division-edit-title').textContent='Edit '+d.name;formFeedback(form);form.scrollIntoView({block:'start',behavior:'smooth'});
+function openDivisionEditor(d=null){
+ const form=$('division-directory-form');form.reset();formFeedback(form);
+ form.elements.operation.value=d?'division_updated':'division_created';
+ form.elements.division_id.readOnly=!!d;form.elements.division_id.value=d?String(d.id):'';
+ form.elements.name.value=d?.name||'';
+ form.elements.display_order.value=String(d?.display_order??(Math.max(0,...divisionDirectoryRows.map(x=>x.display_order))+1));
+ $('division-edit-title').textContent=d?'Edit '+d.name:'Add Division';
+ showDirectoryEditor('division');(d?form.elements.name:form.elements.division_id).focus();
 }
-function editDistrictDirectory(d){
- const form=$('district-directory-form');form.elements.operation.value='district_updated';
- form.elements.division_id.value=String(d.division_id);form.elements.division_id.disabled=true;
- form.elements.district_code.value=d.district_code;form.elements.district_code.readOnly=true;
- form.elements.district_name.value=d.district_name;
- $('district-edit-title').textContent='Edit '+d.district_name;formFeedback(form);form.scrollIntoView({block:'start',behavior:'smooth'});
+function openDistrictEditor(d=null){
+ const parent=selectedDirectoryDivision();if(!parent)return;
+ const form=$('district-directory-form');form.reset();formFeedback(form);
+ form.elements.operation.value=d?'district_updated':'district_created';
+ form.elements.division_id.value=String(parent.id);
+ form.elements.district_code.readOnly=!!d;form.elements.district_code.value=d?.district_code||'';
+ form.elements.district_name.value=d?.district_name||'';form.elements.district_name.dataset.custom=d?'1':'';
+ $('district-edit-title').textContent=d?'Edit '+d.district_name:'Add District';
+ $('district-parent-label').textContent='Division: '+parent.name;
+ showDirectoryEditor('district');(d?form.elements.district_name:form.elements.district_code).focus();
 }
-async function loadDivisionDirectory(){
- const root=$('division-directory-list');root.textContent='Loading directory…';
+function renderDivisionDirectory(){
+ const root=$('division-directory-list');root.replaceChildren();
+ $('directory-count').textContent=String(divisionDirectoryRows.length);
+ for(const d of divisionDirectoryRows){
+  const n=districtDirectoryRows.filter(x=>x.division_id===d.id).length;
+  const b=document.createElement('button');b.type='button';b.className='directory-division-button';
+  b.setAttribute('aria-pressed',String(d.id===selectedDivisionId));
+  const name=document.createElement('strong'),meta=document.createElement('small');
+  name.textContent=d.name;meta.textContent=(d.onboarded?'Configured':'Setup pending')+' · '+n+' '+(n===1?'district':'districts');
+  b.append(name,meta);b.onclick=()=>{selectedDivisionId=d.id;renderDivisionDirectory();showDirectoryEditor(null)};root.append(b);
+ }
+ if(!divisionDirectoryRows.length)root.textContent='No divisions configured.';
+ const d=selectedDirectoryDivision();showDirectoryEditor(null);if(!d)return;
+ const districts=districtDirectoryRows.filter(x=>x.division_id===d.id);
+ $('directory-selected-name').textContent=d.name;
+ $('directory-selected-meta').textContent=(d.onboarded?'Configured for development':'Setup pending')+' · Division '+d.id+' · Display order '+d.display_order;
+ $('directory-district-count').textContent=String(districts.length);
+ $('directory-lodge-count').textContent=String(d.lodge_count);
+ const list=$('directory-district-list');list.replaceChildren();
+ if(!districts.length){const empty=document.createElement('p');empty.className='directory-empty';empty.textContent='No districts yet. Select Add District to get started.';list.append(empty);return}
+ for(const x of districts){
+  const row=document.createElement('div');row.className='directory-district-row';
+  const info=document.createElement('div'),label=document.createElement('strong'),meta=document.createElement('small');
+  label.textContent=x.district_name;meta.textContent='District number: '+x.district_code+(x.active?'':' · Inactive');
+  info.append(label,meta);row.append(info,directoryButton('Edit',()=>openDistrictEditor(x)));list.append(row);
+ }
+}
+async function loadDivisionDirectory(preferred=selectedDivisionId){
+ const root=$('division-directory-list');directoryStatus('Loading directory…');$('division-add').disabled=true;
  try{
   const data=await api('division-directory');divisionDirectoryRows=data.divisions||[];districtDirectoryRows=data.districts||[];
-  root.replaceChildren();
-  const selector=$('district-directory-form').elements.division_id;selector.replaceChildren(new Option('Select division',''));
-  for(const d of divisionDirectoryRows){
-   selector.add(new Option(d.name,String(d.id)));
-   const districts=districtDirectoryRows.filter(x=>x.division_id===d.id);
-   const group=document.createElement('section');group.className='panel';
-   const row=document.createElement('div');row.className='staff-row';
-   const info=document.createElement('div'),name=document.createElement('strong'),meta=document.createElement('small');
-   name.textContent=d.name;meta.textContent=(d.onboarded?'Onboarded test directory':'Setup pending')+' · '+districts.length+' districts · '+d.lodge_count+' active lodges · Order '+d.display_order;
-   info.append(name,document.createElement('br'),meta);
-   const actions=document.createElement('div');actions.className='staff-actions';
-   actions.append(directoryButton('Edit Division',()=>editDivisionDirectory(d)),directoryButton('Add District',()=>{resetDistrictDirectoryForm(d.id);$('district-directory-form').scrollIntoView({block:'start',behavior:'smooth'})}));
-   row.append(info,actions);group.append(row);
-   for(const x of districts){
-    const dr=document.createElement('div');dr.className='staff-row';
-    const label=document.createElement('span');label.textContent=x.district_name+' ('+x.district_code+')'+(x.active?'':' — inactive');
-    dr.append(label,directoryButton('Edit',()=>editDistrictDirectory(x)));group.append(dr);
-   }
-   root.append(group);
-  }
-  if(!divisionDirectoryRows.length)root.textContent='No divisions configured.';
-  resetDivisionDirectoryForm();resetDistrictDirectoryForm();
- }catch(ex){root.textContent=ex.message;toast(ex.message,true)}
+  selectedDivisionId=divisionDirectoryRows.some(d=>d.id===preferred)?preferred:(divisionDirectoryRows.find(d=>d.onboarded)?.id??divisionDirectoryRows[0]?.id??null);
+  renderDivisionDirectory();directoryStatus();$('division-add').disabled=false;
+ }catch(ex){directoryStatus(ex.message,true);if(!divisionDirectoryRows.length)root.textContent='Unable to load divisions. Select Refresh to try again.';throw ex}
 }
-$('division-add').onclick=()=>{resetDivisionDirectoryForm();$('division-directory-form').scrollIntoView({block:'start',behavior:'smooth'})};
-$('directory-refresh').onclick=()=>loadDivisionDirectory();
-$('division-clear').onclick=resetDivisionDirectoryForm;
-$('district-clear').onclick=()=>resetDistrictDirectoryForm();
+$('division-add').onclick=()=>openDivisionEditor();
+$('directory-refresh').onclick=()=>loadDivisionDirectory().catch(ex=>toast(ex.message,true));
+$('directory-edit-division').onclick=()=>{const d=selectedDirectoryDivision();if(d)openDivisionEditor(d)};
+$('directory-add-district').onclick=()=>openDistrictEditor();
+$('division-clear').onclick=()=>showDirectoryEditor(null);
+$('district-clear').onclick=()=>showDirectoryEditor(null);
+$('district-directory-form').elements.district_code.addEventListener('input',e=>{
+ const form=e.target.form;if(form.elements.operation.value==='district_created'&&!form.elements.district_name.dataset.custom)form.elements.district_name.value=e.target.value?'District '+e.target.value:'';
+});
+$('district-directory-form').elements.district_name.addEventListener('input',e=>{e.target.dataset.custom=e.target.value?'1':''});
 async function saveDirectoryForm(event,kind){
- event.preventDefault();const form=event.target,b=event.submitter;busy(b,true);formFeedback(form,'Saving directory entry…','pending');
+ event.preventDefault();const form=event.target,b=event.submitter;busy(b,true);formFeedback(form,'Saving…','pending');
  try{
-  const op=form.elements.operation.value,division_id=Number(form.elements.division_id.value);
+  const operation=form.elements.operation.value,division_id=Number(form.elements.division_id.value);
   const fields=kind==='division'?{name:form.elements.name.value.trim(),display_order:Number(form.elements.display_order.value)}:{district_code:form.elements.district_code.value.trim(),district_name:form.elements.district_name.value.trim()};
-  const result=await api('division-directory-save',{operation:op,division_id,fields});
-  await loadDivisionDirectory();formFeedback(form,result.message||'Directory entry saved.');
+  const result=await api('division-directory-save',{operation,division_id,fields});
+  try{await loadDivisionDirectory(division_id);directoryStatus(result.message||'Directory entry saved.')}
+  catch{directoryStatus('Saved, but the directory could not refresh. Select Refresh.',true);showDirectoryEditor(null)}
  }catch(ex){formFeedback(form,'Not saved: '+ex.message,'error')}
  finally{busy(b,false)}
 }

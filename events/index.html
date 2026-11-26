@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NorCal Event Submissions | Grand Lodge of California</title><meta name="description" content="Submit, change, or cancel a Division IV Masonic event. An inspector verifies submissions for accurate, coordinated publication on the Division calendar. Lodges independently schedule their activities.">
-<meta name="apple-mobile-web-app-title" content="NorCal Masons"><link rel="manifest" href="/manifest.webmanifest?v=20261125a"><meta name="theme-color" content="#142d46"><link rel="icon" type="image/x-icon" href="/assets/favicon.ico?v=20261125a"><link rel="icon" type="image/png" sizes="256x256" href="/assets/favicon.png?v=20261125a"><link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png?v=20261125a"><link rel="stylesheet" href="/app/styles.css?v=29"><link rel="stylesheet" href="/shared/header.css?v=2"><script defer src="/shared/header.js?v=5"></script><script defer src="/script.js?v=5"></script><script defer src="/app/bootstrap.js"></script><script defer src="/app/app.js?v=65"></script>
+<meta name="apple-mobile-web-app-title" content="NorCal Masons"><link rel="manifest" href="/manifest.webmanifest?v=20261125a"><meta name="theme-color" content="#142d46"><link rel="icon" type="image/x-icon" href="/assets/favicon.ico?v=20261125a"><link rel="icon" type="image/png" sizes="256x256" href="/assets/favicon.png?v=20261125a"><link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png?v=20261125a"><link rel="stylesheet" href="/app/styles.css?v=33"><link rel="stylesheet" href="/shared/header.css?v=2"><script defer src="/shared/header.js?v=5"></script><script defer src="/script.js?v=5"></script><script defer src="/app/bootstrap.js"></script><script defer src="/app/app.js?v=20261125-directory2"></script>
 <script defer src="/app/lodges-admin.js?v=5"></script><script defer src="/app/corrections-admin.js?v=2"></script><script defer src="/app/site-settings-admin.js?v=6"></script><script defer src="/app/resources.js?v=3"></script><script defer src="/app/newsletter-admin.js?v=5"></script>
 <script defer src="/app/mfa.js?v=9"></script>
 
@@ -166,6 +166,7 @@
 <button class="tab admin-only hidden" data-tab="corrections" type="button">Corrections</button>
 <button class="tab admin-only hidden" data-tab="lodges" type="button">Lodges</button>
 <button class="tab admin-only hidden" data-tab="staff" type="button">Inspectors</button>
+<button class="tab system-admin-only hidden" data-tab="divisions" type="button">Divisions &amp; Districts</button>
 <button class="tab admin-only hidden" data-tab="newsletter" type="button">Newsletter</button>
 <button class="tab admin-only hidden" data-tab="settings" type="button">Settings</button>
 </div>
@@ -341,8 +342,40 @@
 </label>
 <button id="refresh-history" class="secondary" type="button">Refresh</button>
 </div><div id="history-content" class="timeline"></div><div class="pagination"><button id="history-prev" type="button" class="secondary">← Previous</button><span id="history-page">Page 1</span><button id="history-next" type="button" class="secondary">Next →</button></div></section>
+<section id="tab-divisions" class="panel hidden" aria-labelledby="division-directory-title">
+<div class="directory-heading"><div><h3 id="division-directory-title">Divisions &amp; Districts</h3><p class="muted">Select a division to manage its details and districts.</p></div><div class="directory-toolbar"><button id="directory-refresh" type="button" class="secondary">Refresh</button><button id="division-add" type="button" class="primary">+ Add Division</button></div></div>
+<p class="directory-notice">New divisions are saved as <strong>Setup pending</strong>. Activation and calendar/newsletter setup are not yet available.</p>
+<div id="directory-status" role="status" aria-live="polite"></div>
+<div class="directory-layout">
+<aside class="directory-sidebar" aria-label="Divisions"><div class="directory-sidebar-title">Divisions <span id="directory-count"></span></div><div id="division-directory-list">Loading directory…</div></aside>
+<div class="directory-workspace">
+<section id="directory-detail" aria-label="Selected division" class="hidden">
+<div class="directory-detail-heading"><div><h3 id="directory-selected-name"></h3><p id="directory-selected-meta" class="muted"></p></div><button id="directory-edit-division" type="button" class="secondary">Edit Division</button></div>
+<div class="directory-stats"><div><strong id="directory-district-count">0</strong><span>Districts</span></div><div><strong id="directory-lodge-count">0</strong><span>Active lodges</span></div></div>
+<div class="directory-detail-heading directory-district-heading"><h4>Districts</h4><button id="directory-add-district" type="button" class="primary">+ Add District</button></div>
+<div id="directory-district-list"></div>
+</section>
+<div id="directory-empty" class="directory-empty">Select a division to view its districts.</div>
+<section id="division-editor" class="directory-editor hidden" aria-labelledby="division-edit-title">
+<h3 id="division-edit-title">Add Division</h3>
+<form id="division-directory-form" class="form-grid">
+<input type="hidden" name="operation" value="division_created">
+<label>Division number * <input type="number" name="division_id" min="1" max="32767" step="1" required placeholder="5"></label>
+<label>Division name * <input name="name" maxlength="100" required placeholder="Division V"></label>
+<label>Display order * <input type="number" name="display_order" min="1" max="32767" step="1" required><small class="muted">Controls the order shown in the directory.</small></label>
+<div class="wide form-actions"><button type="submit" class="primary">Save Division</button><button type="button" id="division-clear" class="secondary">Cancel</button></div>
+</form></section>
+<section id="district-editor" class="directory-editor hidden" aria-labelledby="district-edit-title">
+<h3 id="district-edit-title">Add District</h3><p id="district-parent-label" class="muted"></p>
+<form id="district-directory-form" class="form-grid">
+<input type="hidden" name="operation" value="district_created"><input type="hidden" name="division_id">
+<label>District number * <input name="district_code" inputmode="numeric" pattern="[0-9]{1,12}" maxlength="12" required placeholder="501"></label>
+<label>District name * <input name="district_name" maxlength="100" required placeholder="District 501"></label>
+<div class="wide form-actions"><button type="submit" class="primary">Save District</button><button type="button" id="district-clear" class="secondary">Cancel</button></div>
+</form></section>
+</div></div></section>
 <section id="tab-staff" class="panel hidden"><h3>Inspectors</h3>
-<p class="muted">Administrators manage inspector sign-in, district assignments, and private contact records here. Removing access preserves previous publication decisions and activity history.</p>
+<p class="muted">System administrators manage staff sign-in, division and district assignments, and private contact records here. Removing access preserves previous publication decisions and activity history.</p>
 <div id="staff-list"></div>
 <div class="form-actions"><button type="button" id="toggle-removed" class="secondary">Show removed inspectors</button><button id="staff-new" type="button" class="secondary">Add New Inspector</button></div>
 <hr>
@@ -356,9 +389,7 @@
 <label>Middle name <input name="middle_name" maxlength="80" autocomplete="additional-name"></label>
 <label>Last name * <input name="last_name" maxlength="80" autocomplete="family-name"></label>
 <label>Display name (optional) <input name="display_name" maxlength="150" placeholder="Defaults to full name"></label>
-<label>Office <input name="office_title" maxlength="80" value="Inspector"></label>
-<label>District * <select name="district"><option value="">Select district</option><option value="402">402</option><option value="404">404</option><option value="410">410</option><option value="414">414</option><option value="418">418</option><option value="422">422</option><option value="428">428</option><option value="438">438</option></select></label>
-<label>Access Level <select name="role"><option value="inspector">User</option><option value="admin">Admin</option></select></label>
+<fieldset class="wide" id="staff-assignment-fieldset"><legend>Division and district assignments *</legend><p class="muted">Select each assigned division, then its access level and district. District is an assignment, not an event-access restriction.</p><div id="staff-assignments">Loading divisions…</div></fieldset><input type="hidden" name="expected_updated_at">
 <label class="checkline"><input type="checkbox" name="enabled"> Access enabled (activate after review)</label>
 <div class="wide"><h4>Private contact information</h4></div>
 <label>Home phone <input name="home_phone" type="tel" maxlength="50" autocomplete="tel-national"></label>
