@@ -309,6 +309,7 @@ async function identity(){
   $('staff-role').textContent=accessLevelLabel(m.staff.role);
   all('.admin-only').forEach(x=>x.classList.toggle('hidden',m.staff.role!=='admin'));
  }
+ all('.system-admin-only').forEach(x=>x.classList.toggle('hidden',m.staff?.regional_role!=='system_admin'||m.mfa?.verified!==true));
  const blocked=!!(m.staff&&(!m.mfa||m.mfa.required&&!m.mfa.verified));
  const wasLocked=$('admin-view').classList.contains('mfa-locked');
  $('admin-view').classList.toggle('mfa-locked',blocked);
@@ -993,6 +994,7 @@ async function activateInspectorTab(key){
  if($('admin-view').classList.contains('mfa-locked')){
   toast('Complete authenticator verification to access the Inspector Desk.',true);return;
  }
+ if(key==='divisions'&&state.staff?.regional_role!=='system_admin'){toast('System administrator access is required.',true);return;}
  if((key==='staff'||key==='settings'||key==='lodges'||key==='corrections'||key==='newsletter')&&state.staff?.role!=='admin'){
   toast('Administrator access is required to manage newsletters, lodges, inspectors, or settings.',true);
   return;
@@ -1002,7 +1004,7 @@ async function activateInspectorTab(key){
   menu.classList.toggle('active',!!menu.querySelector('.tab.active'));
   menu.open=false;
  });
- for(const k of ['dashboard','import','lodges','corrections','requests','events','resources','history','staff','newsletter','settings'])
+ for(const k of ['dashboard','import','lodges','corrections','requests','events','resources','history','staff','divisions','newsletter','settings'])
   $('tab-'+k).classList.toggle('hidden',k!==key);
  if(key==='dashboard'){await Promise.allSettled([loadDashboard(),window.loadCalendarSync?.(),window.loadWebsitePreview?.()]);}
  if(key==='lodges')await window.loadLodges?.();
@@ -1013,6 +1015,7 @@ async function activateInspectorTab(key){
  if(key==='resources')await window.loadResources?.();
  if(key==='history')await loadHistory(0);
  if(key==='staff')await loadStaff();
+ if(key==='divisions')await loadDivisionDirectory();
  if(key==='newsletter')await window.loadNewsletter?.();
  if(key==='settings')await Promise.allSettled([loadSettings(),window.loadWebsiteSettings?.(),window.loadNewsletter?.()]);
 }
@@ -1264,6 +1267,79 @@ $('staff-form').onsubmit=async e=>{
  }catch(ex){formFeedback(e.target,'Inspector record not saved: '+ex.message,'error')}
  finally{busy(b,false)}
 };
+let divisionDirectoryRows=[],districtDirectoryRows=[];
+function resetDivisionDirectoryForm(){
+ const form=$('division-directory-form');form.reset();form.elements.operation.value='division_created';
+ form.elements.division_id.readOnly=false;
+ form.elements.display_order.value=String(Math.max(0,...divisionDirectoryRows.map(d=>d.display_order))+1);
+ $('division-edit-title').textContent='Add Division';formFeedback(form);
+}
+function resetDistrictDirectoryForm(divisionId=''){
+ const form=$('district-directory-form');form.reset();form.elements.operation.value='district_created';
+ form.elements.division_id.disabled=false;form.elements.district_code.readOnly=false;
+ form.elements.division_id.value=divisionId?String(divisionId):'';
+ $('district-edit-title').textContent='Add District';formFeedback(form);
+}
+function directoryButton(label,callback){
+ const b=document.createElement('button');b.type='button';b.className='secondary';b.textContent=label;b.onclick=callback;return b;
+}
+function editDivisionDirectory(d){
+ const form=$('division-directory-form');form.elements.operation.value='division_updated';
+ form.elements.division_id.value=String(d.id);form.elements.division_id.readOnly=true;
+ form.elements.name.value=d.name;form.elements.display_order.value=String(d.display_order);
+ $('division-edit-title').textContent='Edit '+d.name;formFeedback(form);form.scrollIntoView({block:'start',behavior:'smooth'});
+}
+function editDistrictDirectory(d){
+ const form=$('district-directory-form');form.elements.operation.value='district_updated';
+ form.elements.division_id.value=String(d.division_id);form.elements.division_id.disabled=true;
+ form.elements.district_code.value=d.district_code;form.elements.district_code.readOnly=true;
+ form.elements.district_name.value=d.district_name;
+ $('district-edit-title').textContent='Edit '+d.district_name;formFeedback(form);form.scrollIntoView({block:'start',behavior:'smooth'});
+}
+async function loadDivisionDirectory(){
+ const root=$('division-directory-list');root.textContent='Loading directory…';
+ try{
+  const data=await api('division-directory');divisionDirectoryRows=data.divisions||[];districtDirectoryRows=data.districts||[];
+  root.replaceChildren();
+  const selector=$('district-directory-form').elements.division_id;selector.replaceChildren(new Option('Select division',''));
+  for(const d of divisionDirectoryRows){
+   selector.add(new Option(d.name,String(d.id)));
+   const districts=districtDirectoryRows.filter(x=>x.division_id===d.id);
+   const group=document.createElement('section');group.className='panel';
+   const row=document.createElement('div');row.className='staff-row';
+   const info=document.createElement('div'),name=document.createElement('strong'),meta=document.createElement('small');
+   name.textContent=d.name;meta.textContent=(d.onboarded?'Onboarded test directory':'Setup pending')+' · '+districts.length+' districts · '+d.lodge_count+' active lodges · Order '+d.display_order;
+   info.append(name,document.createElement('br'),meta);
+   const actions=document.createElement('div');actions.className='staff-actions';
+   actions.append(directoryButton('Edit Division',()=>editDivisionDirectory(d)),directoryButton('Add District',()=>{resetDistrictDirectoryForm(d.id);$('district-directory-form').scrollIntoView({block:'start',behavior:'smooth'})}));
+   row.append(info,actions);group.append(row);
+   for(const x of districts){
+    const dr=document.createElement('div');dr.className='staff-row';
+    const label=document.createElement('span');label.textContent=x.district_name+' ('+x.district_code+')'+(x.active?'':' — inactive');
+    dr.append(label,directoryButton('Edit',()=>editDistrictDirectory(x)));group.append(dr);
+   }
+   root.append(group);
+  }
+  if(!divisionDirectoryRows.length)root.textContent='No divisions configured.';
+  resetDivisionDirectoryForm();resetDistrictDirectoryForm();
+ }catch(ex){root.textContent=ex.message;toast(ex.message,true)}
+}
+$('division-add').onclick=()=>{resetDivisionDirectoryForm();$('division-directory-form').scrollIntoView({block:'start',behavior:'smooth'})};
+$('directory-refresh').onclick=()=>loadDivisionDirectory();
+$('division-clear').onclick=resetDivisionDirectoryForm;
+$('district-clear').onclick=()=>resetDistrictDirectoryForm();
+async function saveDirectoryForm(event,kind){
+ event.preventDefault();const form=event.target,b=event.submitter;busy(b,true);formFeedback(form,'Saving directory entry…','pending');
+ try{
+  const op=form.elements.operation.value,division_id=Number(form.elements.division_id.value);
+  const fields=kind==='division'?{name:form.elements.name.value.trim(),display_order:Number(form.elements.display_order.value)}:{district_code:form.elements.district_code.value.trim(),district_name:form.elements.district_name.value.trim()};
+  const result=await api('division-directory-save',{operation:op,division_id,fields});
+  await loadDivisionDirectory();formFeedback(form,result.message||'Directory entry saved.');
+ }catch(ex){formFeedback(form,'Not saved: '+ex.message,'error')}
+ finally{busy(b,false)}
+}
+$('division-directory-form').onsubmit=e=>saveDirectoryForm(e,'division');
+$('district-directory-form').onsubmit=e=>saveDirectoryForm(e,'district');
 async function loadSettings(){
  try{const s=await api('settings');$('email-links').value=s.settings.public_email_links||''}catch(e){toast(e.message,true)}
 }
