@@ -121,9 +121,13 @@ Deno.serve(async req=>{
    return json({divisions:data||[]},200,origin);
   }
   if(action==='config'){
-   const [types,enabled,districts,hosts,lodges,positions]=await Promise.all([db.from('event_types').select('label').eq('enabled',true).order('sort_order'),setting('public_submissions_enabled',false),setting('district_numbers',[]),db.from('events').select('hosted_by,location_name,location_city,attire,invited_audience,cost_details').eq('status','active').order('created_at',{ascending:false}).limit(1000),db.from('lodges').select('lodge_name,lodge_number,abbreviation').eq('active',true).limit(1000),db.from('poc_positions').select('title').eq('active',true).order('sort_order',{ascending:true}).order('title')]);
+   const {data:divisions,error:divisionError}=await db.from('divisions').select('id,name,display_order').eq('onboarded',true).order('display_order');
+   if(divisionError)throw Error('Division directory unavailable');
+   const ids=(divisions||[]).map(d=>d.id);
+   const [types,enabled,districts,hosts,lodges,positions]=await Promise.all([db.from('event_types').select('label').eq('enabled',true).order('sort_order'),setting('public_submissions_enabled',false),db.from('districts').select('district_code,district_name,division_id').eq('active',true).in('division_id',ids).order('district_code'),db.from('events').select('hosted_by,location_name,location_city,attire,invited_audience,cost_details').in('division_id',ids).eq('status','active').order('created_at',{ascending:false}).limit(1000),db.from('lodges').select('lodge_name,lodge_number,abbreviation,district,division_id').in('division_id',ids).eq('active',true).limit(1000),db.from('poc_positions').select('title').eq('active',true).order('sort_order',{ascending:true}).order('title')]);
+   if(districts.error||lodges.error)throw Error('District or lodge directory unavailable');
    const publicSuggestions=(field:string)=>[...new Set((hosts.data||[]).map((x:any)=>String(x[field]||'').trim()).filter(Boolean))].slice(0,100);
-   return json({event_types:(types.data||[]).map((x:any)=>x.label),districts,suggestions:{venue:publicSuggestions('location_name'),city:publicSuggestions('location_city'),attire:publicSuggestions('attire'),audience:publicSuggestions('invited_audience'),cost:publicSuggestions('cost_details'),position:(positions.data||[]).map((x:any)=>x.title)},lodge_titles:(lodges.data||[]).map((x:any)=>({name:x.lodge_name,number:x.lodge_number,abbreviation:x.abbreviation})),hosts:[...(hosts.data||[]).map((x:any)=>x.hosted_by),...(lodges.data||[]).map((x:any)=>[x.lodge_name,x.lodge_number?'No. '+x.lodge_number:''].filter(Boolean).join(' '))].filter(Boolean),public_submissions_enabled:enabled,turnstile_site_key:Deno.env.get('TURNSTILE_SITE_KEY')||null,turnstile_ready:Boolean(Deno.env.get('TURNSTILE_SITE_KEY')&&Deno.env.get('TURNSTILE_SECRET')),logged_in:!!a.user,staff:a.staff?{role:a.staff.role,display_name:a.staff.display_name}:null},200,origin);
+   return json({event_types:(types.data||[]).map((x:any)=>x.label),divisions:divisions||[],district_directory:districts.data||[],districts:(districts.data||[]).map(d=>d.district_code),suggestions:{venue:publicSuggestions('location_name'),city:publicSuggestions('location_city'),attire:publicSuggestions('attire'),audience:publicSuggestions('invited_audience'),cost:publicSuggestions('cost_details'),position:(positions.data||[]).map((x:any)=>x.title)},lodge_titles:(lodges.data||[]).map((x:any)=>({name:x.lodge_name,number:x.lodge_number,abbreviation:x.abbreviation,district:x.district,division_id:x.division_id})),hosts:[...(hosts.data||[]).map((x:any)=>x.hosted_by),...(lodges.data||[]).map((x:any)=>[x.lodge_name,x.lodge_number?'No. '+x.lodge_number:''].filter(Boolean).join(' '))].filter(Boolean),public_submissions_enabled:enabled,turnstile_site_key:Deno.env.get('TURNSTILE_SITE_KEY')||null,turnstile_ready:Boolean(Deno.env.get('TURNSTILE_SITE_KEY')&&Deno.env.get('TURNSTILE_SECRET')),logged_in:!!a.user,staff:a.staff?{role:a.staff.role,display_name:a.staff.display_name}:null},200,origin);
   }
   if(action==='me'){
    const mfa=a.staff?await staffMfaState(a.user,a.token):null;
@@ -170,10 +174,11 @@ Deno.serve(async req=>{
    const bodyDivision=parseDivision(body.division_id);
    if(bodyDivision!==null&&!scope.includes(bodyDivision))throw Error('Staff access required for this division');
    if(kind==='new'){
-     const chosen=bodyDivision??(scope.length===1?scope[0]:null);
-     if(chosen===null)throw Error('Select the division for this submission');
-     divisionId=chosen;
      proposed_fields=sanitize(body.event||{});
+     const {data:resolved,error:routingError}=await db.rpc('regional_resolve_event_division',{p_district:proposed_fields.district||null,p_type:proposed_fields.event_type,p_division:bodyDivision,p_host:proposed_fields.hosted_by||null});
+     if(routingError||!Number.isInteger(resolved))throw Error(routingError?.message||'Unable to determine division');
+     if(!scope.includes(resolved))throw Error('Staff access required for this division');
+     divisionId=resolved;
      // Public submissions need details; inspector-managed imports stay compatible with legacy records.
      if(!a.staff&&!clean(proposed_fields.public_description))throw Error('Enter a public event description');
      if(!proposed_fields.event_name
