@@ -450,7 +450,7 @@ Deno.serve(async req=>{
   if(action==='staff'){
    requiredAdmin(a);
    const [accounts,assignments,divisions,districts]=await Promise.all([
-    db.from('staff_accounts').select('id,email,display_name,phone,role,regional_role,enabled,created_at,updated_at,removed_at,removed_by,first_name,middle_name,last_name,office_title,home_phone,mobile_phone,home_address,home_address2,city,state,zip,district,member_number').order('display_name'),
+    db.from('staff_accounts').select('id,email,display_name,phone,role,regional_role,enabled,created_at,updated_at,removed_at,removed_by,first_name,middle_name,last_name,home_phone,mobile_phone,home_address,home_address2,city,state,zip,district,member_number').order('display_name'),
     db.from('staff_division_assignments').select('staff_id,division_id,role,district').order('division_id'),
     db.from('divisions').select('id,name,onboarded').order('display_order'),
     db.from('districts').select('district_code,district_name,division_id').eq('active',true).order('district_code')
@@ -512,7 +512,6 @@ Deno.serve(async req=>{
    const member_number=clean(b.member_number,30),home_phone=clean(b.home_phone,50),mobile_phone=clean(b.mobile_phone,50);
    const home_address=clean(b.home_address,220),home_address2=clean(b.home_address2,220);
    const city=clean(b.city,120),stateValue=clean(b.state,2).toUpperCase(),zip=clean(b.zip,12);
-   const office_title=clean(b.office_title,80)||'Inspector';
    const display_name=clean(b.display_name,150)||[first_name,middle_name,last_name].filter(Boolean).join(' ');
    if(!b.expected_updated_at&&b.assignments.some((x:any)=>x?.role==='inspector')){
     for(const [label,value] of [['first name',first_name],['last name',last_name],['member ID',member_number],['mobile phone',mobile_phone],['street address',home_address],['city',city],['state',stateValue],['ZIP',zip]])if(!value)throw Error('Please provide inspector '+label);
@@ -520,8 +519,8 @@ Deno.serve(async req=>{
    if(stateValue && !/^[A-Z]{2}$/.test(stateValue))throw Error('Enter a valid two-letter state');
    if(zip && !/^\d{5}(?:-\d{4})?$/.test(zip))throw Error('Enter a valid ZIP code');
    if(member_number && !/^\d{1,20}$/.test(member_number))throw Error('Member ID must contain digits');
-   if(b.assignments.length>5||b.assignments.some((x:any)=>!x||!Number.isInteger(x.division_id)||!['inspector','division_admin'].includes(x.role)||(x.district!==null&&typeof x.district!=='string')))throw Error('Invalid division assignments');
-   const profile={email,display_name,enabled:b.enabled,phone:clean(b.phone,50)||mobile_phone,first_name,middle_name,last_name,office_title,member_number,home_phone,mobile_phone,home_address,home_address2,city,state:stateValue,zip};
+   if(b.assignments.some((x:any)=>!x||!Number.isInteger(x.division_id)||!['inspector','division_admin'].includes(x.role)||(x.district!==null&&typeof x.district!=='string')))throw Error('Invalid division assignments');
+   const profile={email,display_name,enabled:b.enabled,phone:clean(b.phone,50)||mobile_phone,first_name,middle_name,last_name,member_number,home_phone,mobile_phone,home_address,home_address2,city,state:stateValue,zip};
    const {error}=await db.rpc('regional_staff_save',{p_actor:admin.id,p_profile:profile,p_assignments:b.assignments,p_expected_updated_at:b.expected_updated_at||null});
    if(error)throw Error(error.message);
    return json({ok:true,message:'Staff record and division assignments saved.'},200,origin);

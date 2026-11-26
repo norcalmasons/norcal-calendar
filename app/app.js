@@ -1079,7 +1079,7 @@ $('log-action').onchange=()=>loadHistory(0);
 $('history-prev').onclick=()=>loadHistory(historyPage-1);
 $('history-next').onclick=()=>loadHistory(historyPage+1);
 let showRemovedInspectors=false;
-const staffProfileFields=['email','display_name','phone','first_name','middle_name','last_name','office_title','member_number','home_phone','mobile_phone','home_address','home_address2','city','state','zip'];
+const staffProfileFields=['email','display_name','phone','first_name','middle_name','last_name','member_number','home_phone','mobile_phone','home_address','home_address2','city','state','zip'];
 // Display labels only: role values stay 'inspector'/'admin' for all permission checks.
 function accessLevelLabel(role){return role==='inspector'?'User':role==='admin'?'Admin':nice(role);}
 let staffDivisions=[],staffDistricts=[];
@@ -1130,7 +1130,7 @@ function staffFormRequirements(){
 function clearStaffForm(){
  const form=$('staff-form');form.reset();formFeedback(form);
  form.dataset.editing='0';form.elements.email.readOnly=false;form.elements.enabled.disabled=false;form.elements.expected_updated_at.value='';renderStaffAssignments();
- form.elements.state.value='CA';form.elements.office_title.value='Inspector';
+ form.elements.state.value='CA';
  $('staff-form-mode').textContent='Add Inspector';
  staffFormRequirements();
 }
