@@ -193,58 +193,20 @@ Deno.serve(async req=>{
   const confirmations=new Set((Array.isArray(body.confirmed_rows)?body.confirmed_rows:[]).map(Number));
   const items=await inspect(rows,staff);
   if(items.some(x=>x.status==='invalid'))throw Error('Correct every invalid row before submitting. No events were saved.');
-  const divisionIds=[...new Set(items.map(x=>x.division_id))];
-  if(divisionIds.length!==1)throw Error('During development, use one division per workbook. Mixed-division batches will be enabled after batch ownership conversion.');
-  const divisionId=divisionIds[0];
-  const hash=await digest(JSON.stringify({rows,confirmed_rows:[...confirmations].filter(Number.isInteger).sort((a,b)=>a-b)}));
-  const batchKey=staff.id+':'+divisionId+':'+hash;
-  const {data:existing,error:existingError}=await db.from('bulk_event_imports').select('*').eq('batch_key',batchKey).maybeSingle();
-  if(existingError)throw Error(existingError.message);
-  if(existing){
-   if(existing.status!=='completed')return respond({error:'This spreadsheet is already being processed. Try refreshing the results before submitting again.'},409,origin);
-   return respond({ok:true,replayed:true,batch_id:existing.id,results:existing.results,submitted:existing.submitted_count,skipped:existing.skipped_count,errors:existing.error_count},200,origin);
-  }
-  const {data:batch,error:batchError}=await db.from('bulk_event_imports').insert({division_id:divisionId,batch_key:batchKey,filename,importer_staff_id:staff.id,importer_email:staff.email,source_count:rows.length}).select('id').single();
-  if(batchError){
-   if(batchError.code==='23505')return fail('This spreadsheet is already being processed. Refresh the results before retrying.',409,origin);
-   throw Error('Unable to initialize import tracking: '+batchError.message);
-  }
-  const ctx=await context(staff),results:any[]=[];
+  const ctx=await context(staff),prepared:any[]=[];
   for(const row of rows){
-   const inspected=items.find((v:any)=>v.row_number===Number(row.row_number));
-   const base={row_number:row.row_number,title:inspected?.calendar_title||t(row.event_name),host:inspected?.host||''};
-   if(inspected?.status==='invalid'){results.push({...base,status:'error',message:inspected.issues.join(' ')});continue}
-   if(inspected?.status==='warning'&&!confirmations.has(Number(row.row_number))){
-    results.push({...base,status:'skipped',message:'Possible duplicate — not confirmed. Review and resubmit this row if intentional.'});continue
-   }
+   const inspected=items.find(x=>x.row_number===Number(row.row_number));
    const val=await validated(row,ctx,staff);
-   if(val.issues.length||val.division_id!==divisionId){results.push({...base,status:'error',message:val.issues.join(' ')||'Division changed; preview again.'});continue}
+   if(!inspected||val.issues.length||val.division_id!==inspected.division_id)throw Error('Row '+row.row_number+': '+(val.issues.join(' ')||'Division changed; preview again.'));
    const fingerprint=await digest(matchKey(val.p));
-   const idem=confirmations.has(Number(row.row_number))&&inspected?.status==='warning'
-    ?'bulk-confirm:'+batch.id+':'+row.row_number : 'bulk:'+fingerprint;
-   const code='DIV'+divisionId+'-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase();
-   const {data,error}=await db.rpc('bulk_import_new_request',{
-     p_code:code,p_fields:val.p,p_requester_name:val.requester_name,p_requester_email:val.requester_email,
-     p_requester_phone:val.requester_phone,p_requester_message:val.requester_message,p_dedupe_key:idem,
-     p_actor_email:staff.email,p_staff_id:staff.id,p_batch_id:batch.id,p_row:Number(row.row_number)
-   });
-   if(error){results.push({...base,status:'error',message:error.message});continue}
-   results.push({...base,status:data?.created?'submitted':'skipped',message:data?.created?'Submitted for individual approval':'Previously imported; no duplicate created',request_id:data?.id,request_code:data?.request_code});
+   prepared.push({row_number:Number(row.row_number),division_id:val.division_id,fields:val.p,fingerprint,
+    requester_name:val.requester_name,requester_email:val.requester_email,requester_phone:val.requester_phone,requester_message:val.requester_message,
+    skip:inspected.status==='warning'&&!confirmations.has(Number(row.row_number)),
+    confirmed_duplicate:inspected.status==='warning'&&confirmations.has(Number(row.row_number))});
   }
-  const submitted=results.filter(x=>x.status==='submitted').length,skipped=results.filter(x=>x.status==='skipped').length,errors=results.filter(x=>x.status==='error').length;
-  const {error:doneError}=await db.from('bulk_event_imports').update({status:'completed',completed_at:new Date().toISOString(),submitted_count:submitted,skipped_count:skipped,error_count:errors,results}).eq('id',batch.id);
-  if(doneError)throw Error('Events processed, but import summary could not be finalized: '+doneError.message);
-  let notificationWarning='';
-  if(submitted>0){
-   const {data:members,error:memberError}=await db.from('staff_division_assignments').select('staff_id').eq('division_id',divisionId);
-   const {data:reviewers,error:reviewerError}=memberError?{data:null,error:memberError}:members?.length?await db.from('staff_accounts').select('email').in('id',members.map(x=>x.staff_id)).eq('enabled',true).is('removed_at',null):{data:[],error:null};
-   if(reviewerError)notificationWarning='Inspector summary notification list could not be loaded.';
-   else if(reviewers?.length){
-    const mail=reviewers.map((x:any)=>({message_type:'bulk_import_summary',recipient_email:x.email,idempotency_key:'bulk-summary:'+batch.id+':'+x.email}));
-    const {error:mailError}=await db.from('email_deliveries').upsert(mail,{onConflict:'idempotency_key',ignoreDuplicates:true});
-    if(mailError)notificationWarning='Calendar submissions saved, but summary email could not be queued.';
-   }
-  }
-  return respond({ok:true,batch_id:batch.id,results,submitted,skipped,errors,...(notificationWarning?{notice:notificationWarning}:{})},201,origin);
+  const hash=await digest(JSON.stringify({rows,confirmed_rows:[...confirmations].filter(Number.isInteger).sort((a,b)=>a-b)}));
+  const {data,error}=await db.rpc('regional_bulk_submit',{p_staff:staff.id,p_filename:filename,p_hash:hash,p_rows:prepared});
+  if(error)throw Error('Import not saved: '+error.message);
+  return respond(data,data?.replayed?200:201,origin);
  }catch(e){console.error('Bulk import operation:',e instanceof Error?e.message:e);return fail(e instanceof Error?e.message:'Unable to process bulk import.',400,origin)}
 });
