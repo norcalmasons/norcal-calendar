@@ -447,6 +447,30 @@ Deno.serve(async req=>{
    });
    return json({items,total:count||0,page:pg},200,origin);
   }
+  if(action==='division-directory'){
+   const admin=requiredAdmin(a);
+   if(admin.regional_role!=='system_admin'||admin.division_id!==null)throw Error('System administrator access required');
+   if(req.method!=='GET')return err('GET required',405,origin);
+   const [divisions,districts,lodges]=await Promise.all([
+    db.from('divisions').select('id,name,display_order,onboarded').order('display_order'),
+    db.from('districts').select('district_code,district_name,division_id,active').order('district_code'),
+    db.from('lodges').select('id,division_id').eq('active',true)
+   ]);
+   for(const result of [divisions,districts,lodges])if(result.error)throw Error(result.error.message);
+   const counts=new Map();
+   for(const l of lodges.data||[])counts.set(l.division_id,(counts.get(l.division_id)||0)+1);
+   return json({divisions:(divisions.data||[]).map(d=>({...d,lodge_count:counts.get(d.id)||0})),districts:districts.data||[]},200,origin);
+  }
+  if(action==='division-directory-save'){
+   const admin=requiredAdmin(a);
+   if(admin.regional_role!=='system_admin'||admin.division_id!==null)throw Error('System administrator access required');
+   if(req.method!=='POST')return err('POST required',405,origin);
+   const b=await req.json();
+   if(!['division_created','division_updated','district_created','district_updated'].includes(b.operation)||!Number.isInteger(b.division_id)||b.division_id<1||b.division_id>32767||!b.fields||typeof b.fields!=='object'||Array.isArray(b.fields))throw Error('Invalid directory entry');
+   const {data,error}=await db.rpc('regional_directory_save',{p_actor:admin.id,p_action:b.operation,p_division:b.division_id,p_fields:b.fields});
+   if(error)throw Error(error.message);
+   return json({ok:true,item:data,message:'Directory entry saved.'},200,origin);
+  }
   if(action==='staff'){
    requiredAdmin(a);
    const [accounts,assignments,divisions,districts]=await Promise.all([
