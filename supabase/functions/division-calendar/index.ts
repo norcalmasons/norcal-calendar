@@ -61,12 +61,12 @@ function sanitize(p:any,patch=false,allowOverride=false){
  if(!patch)checkLocation(obj);
  return obj;
 }
-async function resolveSubmittedTitle(obj:any,fallback=''){
+async function resolveSubmittedTitle(obj:any,divisionId:number,fallback=''){
  if(!obj.event_name&&!obj.calendar_title_override
   && !['District School of Instruction','Division School of Instruction'].includes(String(obj.event_type||'')))
   return obj; // untouched legacy non-SOI title
- const {data,error}=await db.rpc('resolve_calendar_title',{
-  p_event_name:obj.event_name||null,p_hosted_by:obj.hosted_by||null,
+ const {data,error}=await db.rpc('regional_resolve_calendar_title',{
+  p_division:divisionId,p_event_name:obj.event_name||null,p_hosted_by:obj.hosted_by||null,
   p_event_type:obj.event_type||null,p_district:obj.district||null,
   p_override:obj.calendar_title_override||null,p_fallback:obj.title||fallback||null
  });
@@ -74,20 +74,21 @@ async function resolveSubmittedTitle(obj:any,fallback=''){
  obj.title=data;
  return obj;
 }
-function code(){return 'DIV4-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase()}
-async function eventForCode(c:string){
- const {data:e}=await db.from('events').select('*').eq('event_code',c).maybeSingle();
+function code(divisionId:number){return 'DIV'+divisionId+'-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase()}
+async function eventForCode(c:string,scope:number[]|null=null){
+ const within=(q:any)=>scope===null?q:q.in('division_id',scope);
+ const {data:e}=await within(db.from('events').select('*').eq('event_code',c)).maybeSingle();
  if(e)return e;
- const {data:r}=await db.from('event_requests').select('approved_event_id').eq('request_code',c).maybeSingle();
+ const {data:r}=await within(db.from('event_requests').select('approved_event_id').eq('request_code',c)).maybeSingle();
  if(!r?.approved_event_id)return null;
- const {data:event}=await db.from('events').select('*').eq('id',r.approved_event_id).maybeSingle();
+ const {data:event}=await within(db.from('events').select('*').eq('id',r.approved_event_id)).maybeSingle();
  return event;
 }
 async function staffMfaState(user:any,token:string){return await regionalMfaState(db,user,token)}
 async function verifiedMfaRequired(user:any,token:string){return await requireMfa(db,user,token)}
 function requiredStaff(a:any){if(!a.staff)throw Error('Inspector login required or account disabled');return a.staff}
 function requiredAdmin(a:any){const s=requiredStaff(a);if(s.role!=='admin')throw Error('Administrator access required');return s}
-const scopedActions=new Set(['requests','detail','dashboard','calendar-sync-overview','events','event-detail','audit','event-scope']);
+const scopedActions=new Set(['requests','detail','dashboard','calendar-sync-overview','events','event-detail','audit','event-scope','inspector-edit','inspector-publish-edit','calendar-retry','event-undo','inspector-cancel-event','review']);
 function parseDivision(value:unknown):number|null{
  if(value===null||value===undefined||value==='')return null;
  if(!/^[1-9][0-9]{0,4}$/.test(String(value))||Number(value)>32767)throw Error('Invalid division selection');
@@ -98,6 +99,10 @@ async function eventScope(staff:any,requested:number|null,adminOnly=false):Promi
  if(error||!Array.isArray(data)||!data.length||data.some(x=>!Number.isInteger(x)||x<1))throw Error('Staff access required for this division');
  return data;
 }
+async function validateDistrict(divisionId:number,eventType:any,district:any){
+ const {error}=await db.rpc('regional_validate_event_district',{p_division:divisionId,p_type:String(eventType||''),p_district:district===null||district===undefined?null:String(district)});
+ if(error)throw Error('Choose an active district in this division');
+}
 Deno.serve(async req=>{
  const origin=req.headers.get('origin')||'';
  if(req.method==='OPTIONS')return new Response(null,{status:204,headers:{'access-control-allow-origin':allowed.has(origin)?origin:'null','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'authorization,content-type,apikey,x-client-info','access-control-max-age':'3600','vary':'Origin'}});
@@ -107,8 +112,9 @@ Deno.serve(async req=>{
   const a=await auth(req);
   if(a.staff && !['config','me'].includes(action)) await verifiedMfaRequired(a.user,a.token);
   // Keep the transitional system-admin-only gateway during regional conversion.
-  const requestedDivision=scopedActions.has(action)?parseDivision(u.searchParams.get('division_id')):null;
-  const scope=scopedActions.has(action)?await eventScope(requiredStaff(a),requestedDivision,action==='event-undo'):[];
+  const scopedAction=scopedActions.has(action)||((action==='submit'||action==='locate')&&!!a.staff);
+  const requestedDivision=scopedAction?parseDivision(u.searchParams.get('division_id')):null;
+  const scope=scopedAction?await eventScope(requiredStaff(a),requestedDivision,action==='event-undo'):[];
   if(action==='event-scope'){
    const {data,error}=await db.from('divisions').select('id,name').in('id',scope).order('display_order');
    if(error)throw Error('Division directory unavailable');
@@ -131,11 +137,11 @@ Deno.serve(async req=>{
   if(action==='locate'){
    if(!a.user)throw Error('Verify your email using the sign-in link first');
    const key=clean(u.searchParams.get('code'),80).toUpperCase();
-   const e=await eventForCode(key);
+   const e=await eventForCode(key,a.staff?scope:null);
    if(!e)throw Error('Event not found. Check the Submission ID.');
    const {data:r}=await db.from('event_requests').select('requester_email').eq('approved_event_id',e.id).eq('request_type','new').maybeSingle();
    if(!a.staff && r?.requester_email!==a.email)throw Error('Sign in using the email address from the original submission');
-   const pub=Object.fromEntries(['id','event_code',...fields,'version','status','starts_at','ends_at'].map(k=>[k,e[k]]));
+   const pub=Object.fromEntries(['id','division_id','event_code',...fields,'version','status','starts_at','ends_at'].map(k=>[k,e[k]]));
    return json({event:pub},200,origin);
   }
   if(action==='submit'){
@@ -160,51 +166,59 @@ Deno.serve(async req=>{
      if(limitError)throw Error('Unable to confirm submission limit. Please try again later.');
      if((recentSubmissions||0)>=20)throw Error('Too many event submissions from this email address. Please wait an hour before trying again.');
    }
-   let event_id=null, base_event_version=null, proposed_fields:any={};
+   let event_id=null, base_event_version=null, proposed_fields:any={},divisionId:number;
+   const bodyDivision=parseDivision(body.division_id);
+   if(bodyDivision!==null&&!scope.includes(bodyDivision))throw Error('Staff access required for this division');
    if(kind==='new'){
+     const chosen=bodyDivision??(scope.length===1?scope[0]:null);
+     if(chosen===null)throw Error('Select the division for this submission');
+     divisionId=chosen;
      proposed_fields=sanitize(body.event||{});
      // Public submissions need details; inspector-managed imports stay compatible with legacy records.
      if(!a.staff&&!clean(proposed_fields.public_description))throw Error('Enter a public event description');
      if(!proposed_fields.event_name
     && !['District School of Instruction','Division School of Instruction'].includes(String(proposed_fields.event_type)))
     throw Error('Enter the event name');
-     await resolveSubmittedTitle(proposed_fields);
-     const districts=await setting('district_numbers',[]);
-     if(kind==='new' && proposed_fields.event_type!=='Division School of Instruction'&&!districts.includes(String(proposed_fields.district)))throw Error('Choose a valid district number');
+     await resolveSubmittedTitle(proposed_fields,divisionId);
+     await validateDistrict(divisionId,proposed_fields.event_type,proposed_fields.district);
      const types=await db.from('event_types').select('label').eq('label',proposed_fields.event_type).maybeSingle();
      if(!types.data)throw Error('Select a valid event type');
      if(!enabled && a.staff && requester_email!==a.email)throw Error('Use your own email address during test mode');
    }else{
      if(!a.user||(!a.staff&&requester_email!==a.email))throw Error('Verify the original submission contact email first');
-     const e=await eventForCode(clean(body.request_code,80).toUpperCase());
+     const e=await eventForCode(clean(body.request_code,80).toUpperCase(),scope);
      if(!e)throw Error('Original Submission ID not found');
      if(e.status!=='active')throw Error('This event is already cancelled');
      const {data:orig}=await db.from('event_requests').select('requester_email').eq('request_type','new').eq('approved_event_id',e.id).maybeSingle();
      if(!a.staff&&orig?.requester_email!==a.email)throw Error('Use the email address from the original submission');
+     divisionId=e.division_id;
+     if(bodyDivision!==null&&bodyDivision!==divisionId)throw Error('Submission division does not match the event');
      event_id=e.id;base_event_version=e.version;
      if(kind==='change'){
        proposed_fields=sanitize(body.changes||{},true);
        if(!Object.keys(proposed_fields).length)throw Error('There are no changes to submit');
-       if(Object.hasOwn(proposed_fields,'district')){
-         const districts=await setting('district_numbers',[]);
-         if((proposed_fields.event_type||e.event_type)!=='Division School of Instruction'&&!districts.includes(String(proposed_fields.district)))throw Error('Choose a valid district number');
-       }
+       if(Object.hasOwn(proposed_fields,'district')||Object.hasOwn(proposed_fields,'event_type'))await validateDistrict(divisionId,proposed_fields.event_type??e.event_type,proposed_fields.district??e.district);
        if(locationKeys.some(k=>Object.hasOwn(proposed_fields,k))||Object.hasOwn(proposed_fields,'location_tbd')||Object.hasOwn(proposed_fields,'virtual_meeting_url')||Object.hasOwn(proposed_fields,'event_mode')){
          checkLocation({...e,...proposed_fields});
        }
      }
      else proposed_fields={reason:clean(body.reason,2000)};
    }
-   const request_code=code();
+   const request_code=code(divisionId);
    const {data,error}=await db.from('event_requests').insert({
-     request_code,event_id,request_type:kind,base_event_version,proposed_fields,
+     division_id:divisionId,request_code,event_id,request_type:kind,base_event_version,proposed_fields,
      requester_name,requester_email,requester_phone:clean(body.phone,50),
      requester_message:clean(body.message,2000)
    }).select('id,request_code').single();
    if(error)throw Error('Unable to save submission: '+error.message);
    await db.from('email_deliveries').insert({request_id:data.id,message_type:'acknowledgment',recipient_email:requester_email,idempotency_key:data.id+':ack'});
-   const {data:reviewers}=await db.from('staff_accounts').select('email').eq('enabled',true);
-   if(reviewers?.length)await db.from('email_deliveries').insert(reviewers.map((s:any)=>({request_id:data.id,message_type:'reviewer_notification',recipient_email:s.email,idempotency_key:data.id+':reviewer:'+s.email})));
+   const {data:members,error:memberError}=await db.from('staff_division_assignments').select('staff_id').eq('division_id',divisionId);
+   if(memberError)console.error('Unable to find division reviewers',memberError.message);
+   else if(members?.length){
+    const {data:reviewers,error:reviewerError}=await db.from('staff_accounts').select('email').in('id',members.map(x=>x.staff_id)).eq('enabled',true).is('removed_at',null);
+    if(reviewerError)console.error('Unable to find active division reviewers',reviewerError.message);
+    else if(reviewers?.length)await db.from('email_deliveries').insert([...new Set(reviewers.map(x=>x.email))].map(email=>({request_id:data.id,message_type:'reviewer_notification',recipient_email:email,idempotency_key:data.id+':reviewer:'+email})));
+   }
    await db.from('event_history').insert({event_id,request_id:data.id,action:'submitted',actor_email:requester_email,after_data:{kind}});
    return json({ok:true,request_code:data.request_code,message:'Calendar submission received for inspector verification and publication. The lodge retains responsibility for scheduling its activity.'},201,origin);
   }
@@ -245,18 +259,17 @@ Deno.serve(async req=>{
    if(req.method!=='POST')return err('POST required',405,origin);
    const staff=requiredStaff(a),b=await req.json();
    const id=clean(b.id,60);
-   const {data:r,error:readError}=await db.from('event_requests').select('id,request_type,status,event_id,edit_version').eq('id',id).maybeSingle();
+   const {data:r,error:readError}=await db.from('event_requests').select('id,division_id,request_type,status,event_id,edit_version').in('division_id',scope).eq('id',id).maybeSingle();
    if(readError||!r)throw Error('Submission not found');
    if(!['pending','needs_correction'].includes(r.status)||!['new','change'].includes(r.request_type))throw Error('This submission cannot be edited');
    const input=sanitize(b.fields||{},false,true);
-   await resolveSubmittedTitle(input);
-   const districts=await setting('district_numbers',[]);
-   if(input.event_type!=='Division School of Instruction'&&!districts.includes(String(input.district)))throw Error('Choose a valid district');
+   await resolveSubmittedTitle(input,r.division_id);
+   await validateDistrict(r.division_id,input.event_type,input.district);
    const {data:eventType}=await db.from('event_types').select('label').eq('label',input.event_type).eq('enabled',true).maybeSingle();
    if(!eventType)throw Error('Choose a valid event type');
    let draft:any=input;
    if(r.request_type==='change'){
-     const {data:current,error:eventError}=await db.from('events').select('*').eq('id',r.event_id).maybeSingle();
+     const {data:current,error:eventError}=await db.from('events').select('*').in('division_id',scope).eq('id',r.event_id).maybeSingle();
      if(eventError||!current||current.status!=='active')throw Error('Published event is no longer active');
      const changes:Record<string,unknown>={};
      const base:any={...current,
@@ -280,10 +293,11 @@ Deno.serve(async req=>{
    const staff=requiredStaff(a),body=await req.json();
    const id=clean(body.id,60),version=Number(body.expected_version);
    if(!Number.isInteger(version)||version<1)throw Error('Reload the event before editing');
+   const {data:parent,error:parentError}=await db.from('events').select('division_id').in('division_id',scope).eq('id',id).maybeSingle();
+   if(parentError||!parent)throw Error('Published event not found');
    const payload=sanitize(body.fields||{},false,true);
-   await resolveSubmittedTitle(payload);
-   const districts=await setting('district_numbers',[]);
-   if(payload.event_type!=='Division School of Instruction'&&!districts.includes(String(payload.district)))throw Error('Select a valid district');
+   await resolveSubmittedTitle(payload,parent.division_id);
+   await validateDistrict(parent.division_id,payload.event_type,payload.district);
    const {data:eventType}=await db.from('event_types').select('label').eq('label',payload.event_type).eq('enabled',true).maybeSingle();
    if(!eventType)throw Error('Choose a valid event type');
    if(!['in_person','hybrid','online'].includes(String(payload.event_mode)))throw Error('Select a valid event format');
@@ -339,6 +353,8 @@ Deno.serve(async req=>{
    const staff=requiredStaff(a),b=await req.json();
    const version=Number(b.expected_version);
    if(!Number.isInteger(version)||version<1)throw Error('Reload event before retry');
+   const {data:parent,error:parentError}=await db.from('events').select('id').in('division_id',scope).eq('id',clean(b.id,80)).maybeSingle();
+   if(parentError||!parent)throw Error('Published event not found');
    const {data,error}=await db.rpc('inspector_retry_calendar_sync',
       {p_event_id:clean(b.id,80),p_staff:staff.id,p_expected_version:version});
    if(error)throw Error(error.message);
@@ -349,6 +365,8 @@ Deno.serve(async req=>{
    const admin=requiredAdmin(a),b=await req.json();
    const version=Number(b.expected_version);
    if(!Number.isInteger(version)||version<1)throw Error('Reload event before undo');
+   const {data:parent,error:parentError}=await db.from('events').select('id').in('division_id',scope).eq('id',clean(b.id,80)).maybeSingle();
+   if(parentError||!parent)throw Error('Published event not found');
    const {data,error}=await db.rpc('admin_undo_last_published_edit',
      {p_event_id:clean(b.id,80),p_history_id:clean(b.history_id,80),
       p_staff:admin.id,p_expected_version:version});
@@ -396,16 +414,16 @@ Deno.serve(async req=>{
    const staff=requiredStaff(a),body=await req.json();
    const id=clean(body.event_id,80),reason=clean(body.reason,2000);
    if(!reason)throw Error('Enter a cancellation reason');
-   const {data:event,error:lookupError}=await db.from('events').select('id,event_code,status,version').eq('id',id).maybeSingle();
+   const {data:event,error:lookupError}=await db.from('events').select('id,division_id,event_code,status,version').in('division_id',scope).eq('id',id).maybeSingle();
    if(lookupError||!event||event.status!=='active')throw Error('Event is not active. Refresh before cancelling.');
-   const {data:pending,error:pendingError}=await db.from('event_requests').select('id,edit_version,request_code')
+   const {data:pending,error:pendingError}=await db.from('event_requests').select('id,edit_version,request_code').in('division_id',scope)
     .eq('event_id',id).eq('request_type','cancel').in('status',['pending','needs_correction'])
     .order('submitted_at',{ascending:false}).limit(1);
    if(pendingError)throw Error(pendingError.message);
    let request=pending?.[0];
    if(!request){
     const created=await db.from('event_requests').insert({
-     request_code:code(),event_id:id,request_type:'cancel',base_event_version:event.version,
+     division_id:event.division_id,request_code:code(event.division_id),event_id:id,request_type:'cancel',base_event_version:event.version,
      proposed_fields:{reason},requester_name:staff.display_name||a.email,requester_email:a.email,
      requester_message:reason
     }).select('id,edit_version,request_code').single();
@@ -427,14 +445,16 @@ Deno.serve(async req=>{
    if(decision==='needs_correction'&&!clean(b.note))throw Error('Explain what needs correction before returning the submission');
    const version=Number(b.expected_version);
    if(!Number.isInteger(version)||version<0)throw Error('Reload this submission before recording a publication decision');
+   const {data:parent,error:parentError}=await db.from('event_requests').select('id,division_id').in('division_id',scope).eq('id',b.id).maybeSingle();
+   if(parentError||!parent)throw Error('Submission not found');
    const {data,error}=await db.rpc('review_request_checked',{p_id:b.id,p_staff:staff.id,p_decision:decision,p_note:clean(b.note,2000),p_version:version});
    if(error)throw Error(error.message);
    if(decision==='approved'&&data?.event_id){
-    const {data:request}=await db.from('event_requests').select('proposed_fields,inspector_edits').eq('id',b.id).maybeSingle();
+    const {data:request}=await db.from('event_requests').select('proposed_fields,inspector_edits').in('division_id',scope).eq('id',b.id).maybeSingle();
     const fields=request?.inspector_edits||request?.proposed_fields||{};
     if(Object.hasOwn(fields,'virtual_meeting_url')||fields.event_mode==='in_person'){
      const link=fields.event_mode==='in_person'?null:clean(fields.virtual_meeting_url,1000)||null;
-     const {error:linkError}=await db.from('events').update({virtual_meeting_url:link}).eq('id',data.event_id);
+     const {error:linkError}=await db.from('events').update({virtual_meeting_url:link}).in('division_id',scope).eq('id',data.event_id);
      if(linkError)return json({ok:true,result:data,notice:'Approved, but saving the online meeting link needs attention: '+linkError.message},200,origin);
     }
    }
