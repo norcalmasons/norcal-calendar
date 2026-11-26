@@ -87,6 +87,17 @@ async function staffMfaState(user:any,token:string){return await regionalMfaStat
 async function verifiedMfaRequired(user:any,token:string){return await requireMfa(db,user,token)}
 function requiredStaff(a:any){if(!a.staff)throw Error('Inspector login required or account disabled');return a.staff}
 function requiredAdmin(a:any){const s=requiredStaff(a);if(s.role!=='admin')throw Error('Administrator access required');return s}
+const scopedActions=new Set(['requests','detail','dashboard','calendar-sync-overview','events','event-detail','audit','event-scope']);
+function parseDivision(value:unknown):number|null{
+ if(value===null||value===undefined||value==='')return null;
+ if(!/^[1-9][0-9]{0,4}$/.test(String(value))||Number(value)>32767)throw Error('Invalid division selection');
+ return Number(value);
+}
+async function eventScope(staff:any,requested:number|null,adminOnly=false):Promise<number[]>{
+ const {data,error}=await db.rpc('regional_event_divisions',{p_staff:staff.id,p_requested:requested,p_admin_only:adminOnly});
+ if(error||!Array.isArray(data)||!data.length||data.some(x=>!Number.isInteger(x)||x<1))throw Error('Staff access required for this division');
+ return data;
+}
 Deno.serve(async req=>{
  const origin=req.headers.get('origin')||'';
  if(req.method==='OPTIONS')return new Response(null,{status:204,headers:{'access-control-allow-origin':allowed.has(origin)?origin:'null','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'authorization,content-type,apikey,x-client-info','access-control-max-age':'3600','vary':'Origin'}});
@@ -95,6 +106,14 @@ Deno.serve(async req=>{
   const u=new URL(req.url), action=u.searchParams.get('action')||'config';
   const a=await auth(req);
   if(a.staff && !['config','me'].includes(action)) await verifiedMfaRequired(a.user,a.token);
+  // Keep the transitional system-admin-only gateway during regional conversion.
+  const requestedDivision=scopedActions.has(action)?parseDivision(u.searchParams.get('division_id')):null;
+  const scope=scopedActions.has(action)?await eventScope(requiredStaff(a),requestedDivision,action==='event-undo'):[];
+  if(action==='event-scope'){
+   const {data,error}=await db.from('divisions').select('id,name').in('id',scope).order('display_order');
+   if(error)throw Error('Division directory unavailable');
+   return json({divisions:data||[]},200,origin);
+  }
   if(action==='config'){
    const [types,enabled,districts,hosts,lodges,positions]=await Promise.all([db.from('event_types').select('label').eq('enabled',true).order('sort_order'),setting('public_submissions_enabled',false),setting('district_numbers',[]),db.from('events').select('hosted_by,location_name,location_city,attire,invited_audience,cost_details').eq('status','active').order('created_at',{ascending:false}).limit(1000),db.from('lodges').select('lodge_name,lodge_number,abbreviation').eq('active',true).limit(1000),db.from('poc_positions').select('title').eq('active',true).order('sort_order',{ascending:true}).order('title')]);
    const publicSuggestions=(field:string)=>[...new Set((hosts.data||[]).map((x:any)=>String(x[field]||'').trim()).filter(Boolean))].slice(0,100);
@@ -191,7 +210,7 @@ Deno.serve(async req=>{
   }
   if(action==='requests'){
    requiredStaff(a);
-   let q=db.from('request_index').select('*',{count:'exact'}).order('submitted_at',{ascending:false});
+   let q=db.from('regional_request_index').select('*',{count:'exact'}).in('division_id',scope).order('submitted_at',{ascending:false});
    const st=u.searchParams.get('status');
    if(st&&st!=='all')q=q.eq('status',st);
    const from=u.searchParams.get('from'),to=u.searchParams.get('to');
@@ -212,12 +231,12 @@ Deno.serve(async req=>{
   if(action==='detail'){
    requiredStaff(a);
    const id=u.searchParams.get('id')||'';
-   const {data,error}=await db.from('event_requests').select('*').eq('id',id).single();
+   const {data,error}=await db.from('event_requests').select('*').in('division_id',scope).eq('id',id).single();
    if(error||!data)throw Error('Submission not found');
    const [event,history,calendar,email]=await Promise.all([
-     (data.approved_event_id||data.event_id)?db.from('events').select('*').eq('id',data.approved_event_id||data.event_id).maybeSingle():Promise.resolve({data:null}),
-     db.from('event_history').select('*').eq('request_id',id).order('occurred_at',{ascending:false}),
-     (data.approved_event_id||data.event_id)?db.from('calendar_jobs').select('status,action,created_at,last_error,event_version,finished_at').eq('event_id',data.approved_event_id||data.event_id).order('created_at',{ascending:false}).limit(12):db.from('calendar_jobs').select('status,action,created_at,last_error,event_version,finished_at').eq('request_id',id).order('created_at',{ascending:false}).limit(12),
+     (data.approved_event_id||data.event_id)?db.from('events').select('*').in('division_id',scope).eq('id',data.approved_event_id||data.event_id).maybeSingle():Promise.resolve({data:null}),
+     db.from('regional_event_history').select('*').in('division_id',scope).eq('request_id',id).order('occurred_at',{ascending:false}),
+     (data.approved_event_id||data.event_id)?db.from('regional_calendar_jobs').select('status,action,created_at,last_error,event_version,finished_at').in('division_id',scope).eq('event_id',data.approved_event_id||data.event_id).order('created_at',{ascending:false}).limit(12):db.from('regional_calendar_jobs').select('status,action,created_at,last_error,event_version,finished_at').in('division_id',scope).eq('request_id',id).order('created_at',{ascending:false}).limit(12),
      db.from('email_deliveries').select('message_type,status,recipient_email,last_error').eq('request_id',id)
    ]);
    return json({request:data,event:event.data,history:history.data||[],calendar:calendar.data||[],email:email.data||[]},200,origin);
@@ -275,7 +294,7 @@ Deno.serve(async req=>{
   }
   if(action==='dashboard'){
    requiredStaff(a);
-   const {data,error}=await db.rpc('inspector_dashboard_data');
+   const {data,error}=await db.rpc('regional_inspector_dashboard_data',{p_staff:a.staff.id,p_requested:requestedDivision});
    if(error)throw Error(error.message);
    return json(data||{counts:{pending:0,corrections:0,failed:0,queued:0},requests:[],failures:[],recent:[]},200,origin);
   }
@@ -283,8 +302,8 @@ Deno.serve(async req=>{
    requiredStaff(a);
    if(req.method!=='GET')return err('GET required',405,origin);
    const [events,jobs]=await Promise.all([
-     db.from('events').select('id,event_code,title,status,version,google_event_id,calendar_last_synced_at').order('updated_at',{ascending:false}).limit(2500),
-     db.from('calendar_jobs').select('event_id,status,action,event_version,created_at,finished_at,last_error')
+     db.from('events').select('id,event_code,title,status,version,google_event_id,calendar_last_synced_at').in('division_id',scope).order('updated_at',{ascending:false}).limit(2500),
+     db.from('regional_calendar_jobs').select('event_id,status,action,event_version,created_at,finished_at,last_error').in('division_id',scope)
        .order('created_at',{ascending:false}).limit(5000)
    ]);
    if(events.error)throw Error('Cannot load calendar events: '+events.error.message);
@@ -341,7 +360,7 @@ Deno.serve(async req=>{
    const term=clean(u.searchParams.get('search'),100).replace(/[%,()]/g,'');
    const status=clean(u.searchParams.get('status'),20);
    const pg=Math.max(0,Math.min(1000,Number(u.searchParams.get('page'))||0));
-   let q=db.from('events').select('id,event_code,title,event_type,hosted_by,district,starts_at,ends_at,status,google_event_id,calendar_last_synced_at,version,location_name,location_city',{count:'exact'}).order('starts_at',{ascending:false});
+   let q=db.from('events').select('id,event_code,title,event_type,hosted_by,district,starts_at,ends_at,status,google_event_id,calendar_last_synced_at,version,location_name,location_city',{count:'exact'}).in('division_id',scope).order('starts_at',{ascending:false});
    if(status==='active'||status==='cancelled')q=q.eq('status',status);
    if(term)q=q.or('title.ilike.%'+term+'%,event_code.ilike.%'+term+'%,hosted_by.ilike.%'+term+'%');
    const {data,count,error}=await q.range(pg*50,pg*50+49);
@@ -349,8 +368,7 @@ Deno.serve(async req=>{
    const ids=(data||[]).map((x:any)=>x.id);
    let latest=new Map<string,any>();
    if(ids.length){
-     const {data:jobs,error:jobError}=await db.from('calendar_jobs')
-       .select('event_id,status,action,event_version,last_error,created_at,finished_at')
+     const {data:jobs,error:jobError}=await db.from('regional_calendar_jobs').select('event_id,status,action,event_version,last_error,created_at,finished_at').in('division_id',scope)
        .in('event_id',ids).order('created_at',{ascending:false}).limit(500);
      if(jobError)throw Error(jobError.message);
      for(const job of jobs||[]){if(!latest.has(job.event_id))latest.set(job.event_id,job)}
@@ -360,13 +378,13 @@ Deno.serve(async req=>{
   if(action==='event-detail'){
    requiredStaff(a);
    const id=clean(u.searchParams.get('id'),60);
-   const {data:event,error}=await db.from('events').select('*').eq('id',id).maybeSingle();
+   const {data:event,error}=await db.from('events').select('*').in('division_id',scope).eq('id',id).maybeSingle();
    if(error||!event)throw Error('Published event not found');
    const [jobs,hist]=await Promise.all([
-     db.from('calendar_jobs').select('action,status,finished_at,last_error,event_version,created_at').eq('event_id',id).order('created_at',{ascending:false}).limit(12),
-     db.from('event_history').select('id,request_id,action,actor_email,occurred_at,before_data,after_data,notes').eq('event_id',id).order('occurred_at',{ascending:false}).limit(30)]);
+     db.from('regional_calendar_jobs').select('action,status,finished_at,last_error,event_version,created_at').in('division_id',scope).eq('event_id',id).order('created_at',{ascending:false}).limit(12),
+     db.from('regional_event_history').select('id,request_id,action,actor_email,occurred_at,before_data,after_data,notes').in('division_id',scope).eq('event_id',id).order('occurred_at',{ascending:false}).limit(30)]);
    const requestIds=[...new Set((hist.data||[]).map((x:any)=>x.request_id).filter(Boolean))];
-   const requests=requestIds.length?await db.from('event_requests').select('id,request_code,request_type').in('id',requestIds):{data:[],error:null};
+   const requests=requestIds.length?await db.from('event_requests').select('id,request_code,request_type').in('division_id',scope).in('id',requestIds):{data:[],error:null};
    if(requests.error)throw Error(requests.error.message);
    const requestMap=new Map((requests.data||[]).map((x:any)=>[x.id,x]));
    const entries=(hist.data||[]).map((x:any)=>({...x,request_type:requestMap.get(x.request_id)?.request_type||null,
@@ -426,16 +444,16 @@ Deno.serve(async req=>{
    requiredStaff(a);
    const pg=Math.max(0,Math.min(1000,Number(u.searchParams.get('page')||0)||0));
    const filter=clean(u.searchParams.get('activity'),50);
-   let q=db.from('event_history').select('id,request_id,event_id,action,actor_email,occurred_at,before_data,after_data,notes',{count:'exact'}).order('occurred_at',{ascending:false});
+   let q=db.from('regional_event_history').select('id,request_id,event_id,action,actor_email,occurred_at,before_data,after_data,notes',{count:'exact'}).in('division_id',scope).order('occurred_at',{ascending:false});
    if(u.searchParams.get('request_id'))q=q.eq('request_id',u.searchParams.get('request_id'));
    if(filter)q=q.eq('action',filter);
    const {data,count,error}=await q.range(pg*50,pg*50+49);
    if(error)throw Error(error.message);
    const rid=[...new Set((data||[]).map((x:any)=>x.request_id).filter(Boolean))];
-   const requests=rid.length?await db.from('event_requests').select('id,request_code,request_type,proposed_fields,approved_event_id,event_id').in('id',rid):{data:[],error:null};
+   const requests=rid.length?await db.from('event_requests').select('id,request_code,request_type,proposed_fields,approved_event_id,event_id').in('division_id',scope).in('id',rid):{data:[],error:null};
    if(requests.error)throw Error(requests.error.message);
    const eventIds=[...new Set([...(data||[]).map((x:any)=>x.event_id).filter(Boolean),...(requests.data||[]).map((x:any)=>x.approved_event_id||x.event_id).filter(Boolean)])];
-   const events=eventIds.length?await db.from('events').select('id,event_code,title,status').in('id',eventIds):{data:[],error:null};
+   const events=eventIds.length?await db.from('events').select('id,event_code,title,status').in('division_id',scope).in('id',eventIds):{data:[],error:null};
    if(events.error)throw Error(events.error.message);
    const rm=new Map((requests.data||[]).map((x:any)=>[x.id,x]));
    const em=new Map((events.data||[]).map((x:any)=>[x.id,x]));
@@ -564,5 +582,5 @@ Deno.serve(async req=>{
    if(error)throw Error(error.message);return json({ok:true},200,origin);
   }
   return err('Unknown action',404,origin);
- }catch(e){console.error('request failed',e);const message=e instanceof Error?e.message:'Unexpected server error';return err(message,/inspector login|account disabled|administrator access|authenticator|mfa|required sign.in/i.test(message)?403:400,origin)}
+ }catch(e){console.error('request failed',e);const message=e instanceof Error?e.message:'Unexpected server error';return err(message,/inspector login|account disabled|administrator access|staff access|authenticator|mfa|required sign.in/i.test(message)?403:400,origin)}
 });
