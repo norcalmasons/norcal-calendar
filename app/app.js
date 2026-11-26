@@ -198,7 +198,7 @@ function composedCalendarTitle(form){
  // Standard School of Instruction titles do not depend on event name or venue.
  if(eventType==='District School of Instruction')
   return /^\d{3,4}$/.test(district)?'District '+district+' School of Instruction':'';
- if(eventType==='Division School of Instruction')return 'Division IV School of Instruction';
+ if(eventType==='Division School of Instruction'){const name=divisionName(formDivision(form));return name?name+' School of Instruction':'';}
  if(!name)return form.elements.title?.dataset.originalTitle||'';
  if(!host)return '';
  const lodge=(state.config?.lodge_titles||[]).find(x=>{
@@ -254,7 +254,7 @@ function locationControls(form){
  const districtField=form.elements.district;
  function update(){
   const online=eventMode?.value==='online';
-  const divisionWide=eventType?.value==='Division School of Instruction';
+  const divisionWide=divisionWideType(eventType?.value);
   if(districtField){
    const label=districtField.closest('label');
    if(divisionWide){districtField.value='';districtField.disabled=true;districtField.required=false;}
@@ -299,6 +299,8 @@ const syncNewLocation=locationControls($('new-form'));
 const syncNewTitle=titleControls($('new-form'));
 const syncEditLocation=locationControls($('modify-form'));
 const syncEditTitle=titleControls($('modify-form'));
+bindDivisionRouting($('new-form'),syncNewTitle);
+bindDivisionRouting($('modify-form'),syncEditTitle);
 async function identity(){
  const m=await api('me');state.user=m.email;state.staff=m.staff;
  $('nav-admin').classList.toggle('hidden',!m.staff);
@@ -318,26 +320,47 @@ async function identity(){
  if(wasLocked&&!blocked&&state.view==='admin')void activateInspectorTab('dashboard');
 }
 window.divisionRefreshIdentity=identity;
-const allowedDistrictDivisions=new Map([[1,'Division I'],[2,'Division II'],[3,'Division III'],[4,'Division IV'],[10,'Division X']]);
-function districtDivision(code){
- const value=String(code??'').trim();
- if(!/^\d{3,4}$/.test(value))return null;
- const division=Math.floor(Number(value)/100);
- return allowedDistrictDivisions.has(division)?division:null;
-}
+function divisionName(id){return (state.config?.divisions||[]).find(d=>d.id===Number(id))?.name||''}
+function districtRecord(code){return (state.config?.district_directory||[]).find(d=>d.district_code===String(code??'').trim())}
+function districtDivision(code){return districtRecord(code)?.division_id??null}
+function divisionWideType(type){return ['Division School of Instruction','Division Event'].includes(type)}
 function populateDistrictOptions(select,allDistricts){
- const unique=[...new Set(allDistricts.map(x=>String(x).trim()))];
- for(const [division,label] of allowedDistrictDivisions){
-  const codes=unique.filter(code=>districtDivision(code)===division).sort((a,b)=>Number(a)-Number(b));
-  if(!codes.length)continue;
-  const group=document.createElement('optgroup');group.label=label;
-  for(const code of codes){
-   const option=document.createElement('option');
-   option.value=code;option.textContent='District No. '+code;
-   group.append(option);
-  }
+ const unique=new Set(allDistricts.map(x=>String(x).trim()));
+ const placeholder=select.options[0]?.cloneNode(true)||new Option('Choose district','');
+ select.replaceChildren(placeholder);
+ for(const division of state.config?.divisions||[]){
+  const rows=(state.config?.district_directory||[]).filter(d=>d.division_id===division.id&&unique.has(d.district_code)).sort((a,b)=>a.district_code.localeCompare(b.district_code,undefined,{numeric:true}));
+  if(!rows.length)continue;
+  const group=document.createElement('optgroup');group.label=division.name;
+  for(const d of rows)group.append(new Option('District No. '+d.district_code,d.district_code));
   select.append(group);
  }
+}
+function formDivision(form){
+ const fixed=Number(form.dataset.eventDivision||0);if(fixed)return fixed;
+ return divisionWideType(form.elements.event_type?.value)?Number(form.elements.division_id?.value||0)||null:districtDivision(form.elements.district?.value);
+}
+function syncDivisionRouting(form,autoLodge=false){
+ const district=form.elements.district,choice=form.elements.division_id,display=form.elements.derived_division;
+ if(!display)return;
+ const wide=divisionWideType(form.elements.event_type?.value),fixed=Number(form.dataset.eventDivision||0);
+ if(autoLodge&&!wide&&district&&!fixed){
+  const host=String(form.elements.hosted_by?.value||'').trim().toLowerCase();
+  const matches=(state.config?.lodge_titles||[]).filter(x=>[x.name,x.name+' Lodge No. '+x.number,x.name+' No. '+x.number,x.abbreviation].some(v=>v&&String(v).toLowerCase()===host));
+  if(matches.length===1&&districtRecord(matches[0].district))district.value=matches[0].district;
+ }
+ if(choice){
+  choice.closest('label').classList.toggle('hidden',!wide||!!fixed);
+  choice.disabled=!wide||!!fixed;choice.required=wide&&!fixed;
+  if(!choice.disabled&&!choice.value&&(state.config?.divisions||[]).length===1)choice.value=String(state.config.divisions[0].id);
+ }
+ display.closest('label').classList.toggle('hidden',wide&&!fixed&&!!choice);
+ display.value=divisionName(formDivision(form))||(fixed?'Division '+fixed:'');
+}
+function bindDivisionRouting(form,updateTitle){
+ for(const key of ['district','event_type','division_id'])form.elements[key]?.addEventListener('change',()=>{syncDivisionRouting(form);updateTitle()});
+ form.elements.hosted_by?.addEventListener('change',()=>{syncDivisionRouting(form,true);updateTitle()});
+ syncDivisionRouting(form);updateTitle();
 }
 function preserveExistingDistrict(select,value){
  const code=String(value??'').trim();
@@ -367,11 +390,13 @@ async function init(){
    const el=$(id);
    for(const type of conf.event_types||[]){const op=document.createElement('option');op.value=type;op.textContent=type;el.append(op)}
   }
-  // Public district selection is manual. Show only Divisions I, II, III, IV and X.
-  // Keep the server's statewide list for validating/retaining historical listings.
+  // Directory-driven routing: show districts belonging to onboarded divisions.
   for(const id of ['new-district','edit-district']){
    populateDistrictOptions($(id),conf.districts||[]);
   }
+  const divisionChoice=$('new-form').elements.division_id;
+  for(const d of conf.divisions||[])divisionChoice.add(new Option(d.name,String(d.id)));
+  syncDivisionRouting($('new-form'));syncNewTitle();
   $('banner').classList.toggle('hidden',conf.public_submissions_enabled);
   if(conf.turnstile_site_key){
    const s=document.createElement('script');s.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';s.async=true;
@@ -471,10 +496,11 @@ $('new-form').onsubmit=async e=>{
  try{
   const f=values(e.target),event={};
   for(const k of ['title','event_name','event_type','hosted_by','district','start_local','end_local','event_mode','virtual_meeting_url','location_name','location_address1','location_address2','location_city','location_state','location_zip','location_tbd','public_description','attire','invited_audience','registration_url','payment_url','flyer_url','poc_name','poc_position','poc_phone','poc_email','cost_details'])event[k]=f[k]??'';
-  const result=await api('submit',{kind:'new',name:f.contact_name,email:f.contact_email,phone:f.contact_phone,message:f.contact_message,website:f.website||'',turnstile_token:turnstileToken,event});
+  const division_id=divisionWideType(event.event_type)?Number(f.division_id):null;
+  const result=await api('submit',{kind:'new',division_id,name:f.contact_name,email:f.contact_email,phone:f.contact_phone,message:f.contact_message,website:f.website||'',turnstile_token:turnstileToken,event});
   notify('Calendar submission received.\nSubmission ID: '+result.request_code+'\nSave this number. Your listing is awaiting inspector verification and publication. Lodges schedule their own events.');
   const receipt=document.createElement('div');receipt.className='notice';receipt.style.whiteSpace='pre-line';receipt.textContent='Submission received! Submission ID: '+result.request_code+' — Save this number. Awaiting publication verification.'; e.target.append(receipt);
-  e.target.reset();syncNewLocation();syncNewTitle();turnstileToken='';if(window.turnstile)window.turnstile.reset();
+  e.target.reset();syncNewLocation();syncDivisionRouting(e.target);syncNewTitle();turnstileToken='';if(window.turnstile)window.turnstile.reset();
  }catch(ex){notify(ex.message,true)}finally{busy(btn,false)}
 };
 $('lookup-button').onclick=async e=>{
@@ -492,7 +518,7 @@ $('lookup-button').onclick=async e=>{
   }
   const result=await api('locate',null,{code});
   state.event=result.event;state.original={};
-  const form=$('modify-form');
+  const form=$('modify-form');form.dataset.eventDivision=String(result.event.division_id||'');
   for(const k of ['title','event_name','event_type','hosted_by','district','event_mode','virtual_meeting_url','location_name','location_address1','location_address2','location_city','location_state','location_zip','public_description','location_tbd','poc_name','poc_position','poc_phone','poc_email','cost_details']){
     const v=k==='location_address1'?(result.event.location_address1||result.event.location_address||''):(result.event[k]??'');
     state.original[k]=v;
@@ -504,7 +530,7 @@ $('lookup-button').onclick=async e=>{
       }
     }
    }
-   syncEditLocation();
+   syncEditLocation();syncDivisionRouting(form);
    form.elements.title.dataset.originalTitle=result.event.title||'';
    syncEditTitle();
    $('edit-location-details').open=false;
@@ -564,7 +590,7 @@ const editorFields=['title','event_name','calendar_title_override','event_type',
  'location_name','location_address1','location_address2','location_city','location_state','location_zip','location_tbd',
  'attire','invited_audience','registration_url','payment_url','flyer_url','poc_name','poc_position','poc_phone','poc_email','cost_details'];
 function eventFormValues(e={}){
- const output={};
+ const output={division_id:e.division_id};
  for(const key of editorFields)output[key]=e[key]??'';
  if(e.starts_at)output.start_local=local(e.starts_at);
  if(e.ends_at)output.end_local=local(e.ends_at);
@@ -574,6 +600,7 @@ function eventFormValues(e={}){
 }
 function inspectorEditor(host, initial, save, buttonLabel='Save Inspector Revision'){
  const f=document.createElement('form');
+ f.dataset.eventDivision=String(initial.division_id||'');
  f.id='inspector-form';f.className='inspector-edit-form';
  f.addEventListener('invalid',e=>{
   const d=e.target.closest('details');if(d)d.open=true;
@@ -618,6 +645,7 @@ function inspectorEditor(host, initial, save, buttonLabel='Save Inspector Revisi
  if(!initial.event_name&&f.elements.event_name)f.elements.event_name.required=false; // legacy titles stay intact
  locationControls(f);
  const updateTitle=titleControls(f);
+ bindDivisionRouting(f,updateTitle);
  overrideInput.addEventListener('input',updateTitle);
  const controls=document.createElement('div');controls.className='form-actions';
  f.addEventListener('input',()=>formFeedback(f));
@@ -737,7 +765,7 @@ async function detail(id){
  try{
   const d=await api('detail',null,{id}),r=d.request,p=r.proposed_fields||{},event=d.event||{};
   const submitted={...eventFormValues(event),...p};
-  const effective={...eventFormValues(event),...(r.inspector_edits??p)};
+  const effective={...eventFormValues(event),...(r.inspector_edits??p),division_id:r.division_id};
   const address=[effective.location_address1,effective.location_address2,effective.location_city,effective.location_state,effective.location_zip].filter(Boolean).join(', ')||effective.location_address||'—';
   const pairs=[['Submission ID',r.request_code],['Submission type',nice(r.request_type)],['Submitted',fmt(r.submitted_at)],['Status',nice(r.status)],['Title',effective.title],['Event type',effective.event_type],['Hosting lodge',effective.hosted_by],['District',effective.district?('No. '+effective.district):'—'],['Start',effective.start_local],['End',effective.end_local],['Description',effective.public_description],['Event format',nice(effective.event_mode||'in_person')],['Venue',effective.location_tbd?'Location TBD':effective.location_name],['Address',effective.location_tbd?'Location TBD':address],['Event POC name',effective.poc_name],['Event POC position',effective.poc_position],['Event POC phone',effective.poc_phone],['Event POC email',effective.poc_email],['Cost',effective.cost_details],['Attire',effective.attire],['Attendees',effective.invited_audience],['Registration URL',effective.registration_url],['Payment URL',effective.payment_url],['Flyer / invitation URL',effective.flyer_url],['Cancellation reason',effective.reason],['Contact',r.requester_name],['Email',r.requester_email],['Telephone',r.requester_phone],['Message',r.requester_message]];
   target.innerHTML='<div class="review-title"><div><h2>'+safe(effective.title||nice(r.request_type))+'</h2><p class="muted">'+safe(r.request_code)+'</p></div><span class="chip '+safe(r.status)+'">'+safe(nice(r.status))+'</span></div><div class="detail-grid">'+pairs.map(([k,v])=>'<div><small>'+safe(k)+'</small>'+safe(v??'—')+'</div>').join('')+'</div><h3>Inspector revisions</h3><p class="help">The submitted details remain unchanged. Saved inspector corrections are recorded separately.</p><div id="request-diff"></div><div id="inspector-editor-host"></div><hr><h3>Review &amp; delivery</h3><label>Message to submitter (optional)<textarea id="review-note" rows="2"></textarea></label><div class="review-actions" id="review-actions"></div><div id="delivery-summary"></div><h3>Submission history</h3><div class="timeline" id="item-history"></div>';
