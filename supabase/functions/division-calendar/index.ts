@@ -321,7 +321,7 @@ Deno.serve(async req=>{
    requiredStaff(a);
    if(req.method!=='GET')return err('GET required',405,origin);
    const [events,jobs]=await Promise.all([
-     db.from('events').select('id,event_code,title,status,version,google_event_id,calendar_last_synced_at').in('division_id',scope).order('updated_at',{ascending:false}).limit(2500),
+     db.from('events').select('id,division_id,event_code,title,status,version,google_event_id,calendar_last_synced_at').in('division_id',scope).order('updated_at',{ascending:false}).limit(2500),
      db.from('regional_calendar_jobs').select('event_id,status,action,event_version,created_at,finished_at,last_error').in('division_id',scope)
        .order('created_at',{ascending:false}).limit(5000)
    ]);
@@ -342,7 +342,7 @@ Deno.serve(async req=>{
       else if(['succeeded','completed'].includes(job.status))state='synced';
       else state='queued';
      }else if(event.calendar_last_synced_at&&event.google_event_id){state='synced';}
-     return {id:event.id,code:event.event_code,title:event.title,event_status:event.status,
+     return {id:event.id,division_id:event.division_id,code:event.event_code,title:event.title,event_status:event.status,
       state,last_attempt:job?.created_at||null,last_synced:event.calendar_last_synced_at||null,
       job_status:job?.status||null,error:job?.last_error||null};
    });
@@ -469,7 +469,7 @@ Deno.serve(async req=>{
    requiredStaff(a);
    const pg=Math.max(0,Math.min(1000,Number(u.searchParams.get('page')||0)||0));
    const filter=clean(u.searchParams.get('activity'),50);
-   let q=db.from('regional_event_history').select('id,request_id,event_id,action,actor_email,occurred_at,before_data,after_data,notes',{count:'exact'}).in('division_id',scope).order('occurred_at',{ascending:false});
+   let q=db.from('regional_event_history').select('id,division_id,request_id,event_id,action,actor_email,occurred_at,before_data,after_data,notes',{count:'exact'}).in('division_id',scope).order('occurred_at',{ascending:false});
    if(u.searchParams.get('request_id'))q=q.eq('request_id',u.searchParams.get('request_id'));
    if(filter)q=q.eq('action',filter);
    const {data,count,error}=await q.range(pg*50,pg*50+49);
