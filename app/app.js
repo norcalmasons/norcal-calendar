@@ -1,7 +1,7 @@
 /* Dependency-free auth: the login button must not depend on a third-party CDN. */
-const ROOT='https://lxvceqshpjnjjlllbpaq.supabase.co';
-const KEY='sb_publishable_8wAnbhewmF5a0E2IRUaPhA_swWBgUm_';
-const AUTH_STORAGE='division-iv-calendar-session-v1';
+const ROOT='https://ltowvwvryodzrxtpattd.supabase.co';
+const KEY='sb_publishable_XhQsebuVxOUWkEqQpfWgsg_1tIZPmQL';
+const AUTH_STORAGE='norcal-dev-calendar-session-v1';
 const authEvents=new Set();
 let currentSession=null;
 try{currentSession=JSON.parse(localStorage.getItem(AUTH_STORAGE)||'null')}catch{currentSession=null}
@@ -198,7 +198,7 @@ function composedCalendarTitle(form){
  // Standard School of Instruction titles do not depend on event name or venue.
  if(eventType==='District School of Instruction')
   return /^\d{3,4}$/.test(district)?'District '+district+' School of Instruction':'';
- if(eventType==='Division School of Instruction')return 'Division IV School of Instruction';
+ if(eventType==='Division School of Instruction'){const name=divisionName(formDivision(form));return name?name+' School of Instruction':'';}
  if(!name)return form.elements.title?.dataset.originalTitle||'';
  if(!host)return '';
  const lodge=(state.config?.lodge_titles||[]).find(x=>{
@@ -254,7 +254,7 @@ function locationControls(form){
  const districtField=form.elements.district;
  function update(){
   const online=eventMode?.value==='online';
-  const divisionWide=eventType?.value==='Division School of Instruction';
+  const divisionWide=divisionWideType(eventType?.value);
   if(districtField){
    const label=districtField.closest('label');
    if(divisionWide){districtField.value='';districtField.disabled=true;districtField.required=false;}
@@ -299,6 +299,8 @@ const syncNewLocation=locationControls($('new-form'));
 const syncNewTitle=titleControls($('new-form'));
 const syncEditLocation=locationControls($('modify-form'));
 const syncEditTitle=titleControls($('modify-form'));
+bindDivisionRouting($('new-form'),syncNewTitle);
+bindDivisionRouting($('modify-form'),syncEditTitle);
 async function identity(){
  const m=await api('me');state.user=m.email;state.staff=m.staff;
  $('nav-admin').classList.toggle('hidden',!m.staff);
@@ -309,6 +311,7 @@ async function identity(){
   $('staff-role').textContent=accessLevelLabel(m.staff.role);
   all('.admin-only').forEach(x=>x.classList.toggle('hidden',m.staff.role!=='admin'));
  }
+ all('.system-admin-only').forEach(x=>x.classList.toggle('hidden',m.staff?.regional_role!=='system_admin'||m.mfa?.verified!==true));
  const blocked=!!(m.staff&&(!m.mfa||m.mfa.required&&!m.mfa.verified));
  const wasLocked=$('admin-view').classList.contains('mfa-locked');
  $('admin-view').classList.toggle('mfa-locked',blocked);
@@ -317,26 +320,47 @@ async function identity(){
  if(wasLocked&&!blocked&&state.view==='admin')void activateInspectorTab('dashboard');
 }
 window.divisionRefreshIdentity=identity;
-const allowedDistrictDivisions=new Map([[1,'Division I'],[2,'Division II'],[3,'Division III'],[4,'Division IV'],[10,'Division X']]);
-function districtDivision(code){
- const value=String(code??'').trim();
- if(!/^\d{3,4}$/.test(value))return null;
- const division=Math.floor(Number(value)/100);
- return allowedDistrictDivisions.has(division)?division:null;
-}
+function divisionName(id){return (state.config?.divisions||[]).find(d=>d.id===Number(id))?.name||''}
+function districtRecord(code){return (state.config?.district_directory||[]).find(d=>d.district_code===String(code??'').trim())}
+function districtDivision(code){return districtRecord(code)?.division_id??null}
+function divisionWideType(type){return ['Division School of Instruction','Division Event'].includes(type)}
 function populateDistrictOptions(select,allDistricts){
- const unique=[...new Set(allDistricts.map(x=>String(x).trim()))];
- for(const [division,label] of allowedDistrictDivisions){
-  const codes=unique.filter(code=>districtDivision(code)===division).sort((a,b)=>Number(a)-Number(b));
-  if(!codes.length)continue;
-  const group=document.createElement('optgroup');group.label=label;
-  for(const code of codes){
-   const option=document.createElement('option');
-   option.value=code;option.textContent='District No. '+code;
-   group.append(option);
-  }
+ const unique=new Set(allDistricts.map(x=>String(x).trim()));
+ const placeholder=select.options[0]?.cloneNode(true)||new Option('Choose district','');
+ select.replaceChildren(placeholder);
+ for(const division of state.config?.divisions||[]){
+  const rows=(state.config?.district_directory||[]).filter(d=>d.division_id===division.id&&unique.has(d.district_code)).sort((a,b)=>a.district_code.localeCompare(b.district_code,undefined,{numeric:true}));
+  if(!rows.length)continue;
+  const group=document.createElement('optgroup');group.label=division.name;
+  for(const d of rows)group.append(new Option('District No. '+d.district_code,d.district_code));
   select.append(group);
  }
+}
+function formDivision(form){
+ const fixed=Number(form.dataset.eventDivision||0);if(fixed)return fixed;
+ return divisionWideType(form.elements.event_type?.value)?Number(form.elements.division_id?.value||0)||null:districtDivision(form.elements.district?.value);
+}
+function syncDivisionRouting(form,autoLodge=false){
+ const district=form.elements.district,choice=form.elements.division_id,display=form.elements.derived_division;
+ if(!display)return;
+ const wide=divisionWideType(form.elements.event_type?.value),fixed=Number(form.dataset.eventDivision||0);
+ if(autoLodge&&!wide&&district&&!fixed){
+  const host=String(form.elements.hosted_by?.value||'').trim().toLowerCase();
+  const matches=(state.config?.lodge_titles||[]).filter(x=>[x.name,x.name+' Lodge No. '+x.number,x.name+' No. '+x.number,x.abbreviation].some(v=>v&&String(v).toLowerCase()===host));
+  if(matches.length===1&&districtRecord(matches[0].district))district.value=matches[0].district;
+ }
+ if(choice){
+  choice.closest('label').classList.toggle('hidden',!wide||!!fixed);
+  choice.disabled=!wide||!!fixed;choice.required=wide&&!fixed;
+  if(!choice.disabled&&!choice.value&&(state.config?.divisions||[]).length===1)choice.value=String(state.config.divisions[0].id);
+ }
+ display.closest('label').classList.toggle('hidden',wide&&!fixed&&!!choice);
+ display.value=divisionName(formDivision(form))||(fixed?'Division '+fixed:'');
+}
+function bindDivisionRouting(form,updateTitle){
+ for(const key of ['district','event_type','division_id'])form.elements[key]?.addEventListener('change',()=>{syncDivisionRouting(form);updateTitle()});
+ form.elements.hosted_by?.addEventListener('change',()=>{syncDivisionRouting(form,true);updateTitle()});
+ syncDivisionRouting(form);updateTitle();
 }
 function preserveExistingDistrict(select,value){
  const code=String(value??'').trim();
@@ -366,11 +390,13 @@ async function init(){
    const el=$(id);
    for(const type of conf.event_types||[]){const op=document.createElement('option');op.value=type;op.textContent=type;el.append(op)}
   }
-  // Public district selection is manual. Show only Divisions I, II, III, IV and X.
-  // Keep the server's statewide list for validating/retaining historical listings.
+  // Directory-driven routing: show districts belonging to onboarded divisions.
   for(const id of ['new-district','edit-district']){
    populateDistrictOptions($(id),conf.districts||[]);
   }
+  const divisionChoice=$('new-form').elements.division_id;
+  for(const d of conf.divisions||[])divisionChoice.add(new Option(d.name,String(d.id)));
+  syncDivisionRouting($('new-form'));syncNewTitle();
   $('banner').classList.toggle('hidden',conf.public_submissions_enabled);
   if(conf.turnstile_site_key){
    const s=document.createElement('script');s.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';s.async=true;
@@ -470,10 +496,11 @@ $('new-form').onsubmit=async e=>{
  try{
   const f=values(e.target),event={};
   for(const k of ['title','event_name','event_type','hosted_by','district','start_local','end_local','event_mode','virtual_meeting_url','location_name','location_address1','location_address2','location_city','location_state','location_zip','location_tbd','public_description','attire','invited_audience','registration_url','payment_url','flyer_url','poc_name','poc_position','poc_phone','poc_email','cost_details'])event[k]=f[k]??'';
-  const result=await api('submit',{kind:'new',name:f.contact_name,email:f.contact_email,phone:f.contact_phone,message:f.contact_message,website:f.website||'',turnstile_token:turnstileToken,event});
+  const division_id=divisionWideType(event.event_type)?Number(f.division_id):null;
+  const result=await api('submit',{kind:'new',division_id,name:f.contact_name,email:f.contact_email,phone:f.contact_phone,message:f.contact_message,website:f.website||'',turnstile_token:turnstileToken,event});
   notify('Calendar submission received.\nSubmission ID: '+result.request_code+'\nSave this number. Your listing is awaiting inspector verification and publication. Lodges schedule their own events.');
   const receipt=document.createElement('div');receipt.className='notice';receipt.style.whiteSpace='pre-line';receipt.textContent='Submission received! Submission ID: '+result.request_code+' — Save this number. Awaiting publication verification.'; e.target.append(receipt);
-  e.target.reset();syncNewLocation();syncNewTitle();turnstileToken='';if(window.turnstile)window.turnstile.reset();
+  e.target.reset();syncNewLocation();syncDivisionRouting(e.target);syncNewTitle();turnstileToken='';if(window.turnstile)window.turnstile.reset();
  }catch(ex){notify(ex.message,true)}finally{busy(btn,false)}
 };
 $('lookup-button').onclick=async e=>{
@@ -491,7 +518,7 @@ $('lookup-button').onclick=async e=>{
   }
   const result=await api('locate',null,{code});
   state.event=result.event;state.original={};
-  const form=$('modify-form');
+  const form=$('modify-form');form.dataset.eventDivision=String(result.event.division_id||'');
   for(const k of ['title','event_name','event_type','hosted_by','district','event_mode','virtual_meeting_url','location_name','location_address1','location_address2','location_city','location_state','location_zip','public_description','location_tbd','poc_name','poc_position','poc_phone','poc_email','cost_details']){
     const v=k==='location_address1'?(result.event.location_address1||result.event.location_address||''):(result.event[k]??'');
     state.original[k]=v;
@@ -503,7 +530,7 @@ $('lookup-button').onclick=async e=>{
       }
     }
    }
-   syncEditLocation();
+   syncEditLocation();syncDivisionRouting(form);
    form.elements.title.dataset.originalTitle=result.event.title||'';
    syncEditTitle();
    $('edit-location-details').open=false;
@@ -563,7 +590,7 @@ const editorFields=['title','event_name','calendar_title_override','event_type',
  'location_name','location_address1','location_address2','location_city','location_state','location_zip','location_tbd',
  'attire','invited_audience','registration_url','payment_url','flyer_url','poc_name','poc_position','poc_phone','poc_email','cost_details'];
 function eventFormValues(e={}){
- const output={};
+ const output={division_id:e.division_id};
  for(const key of editorFields)output[key]=e[key]??'';
  if(e.starts_at)output.start_local=local(e.starts_at);
  if(e.ends_at)output.end_local=local(e.ends_at);
@@ -573,6 +600,7 @@ function eventFormValues(e={}){
 }
 function inspectorEditor(host, initial, save, buttonLabel='Save Inspector Revision'){
  const f=document.createElement('form');
+ f.dataset.eventDivision=String(initial.division_id||'');
  f.id='inspector-form';f.className='inspector-edit-form';
  f.addEventListener('invalid',e=>{
   const d=e.target.closest('details');if(d)d.open=true;
@@ -617,6 +645,7 @@ function inspectorEditor(host, initial, save, buttonLabel='Save Inspector Revisi
  if(!initial.event_name&&f.elements.event_name)f.elements.event_name.required=false; // legacy titles stay intact
  locationControls(f);
  const updateTitle=titleControls(f);
+ bindDivisionRouting(f,updateTitle);
  overrideInput.addEventListener('input',updateTitle);
  const controls=document.createElement('div');controls.className='form-actions';
  f.addEventListener('input',()=>formFeedback(f));
@@ -704,7 +733,7 @@ async function showCoordinationAdvisory(host,fields,currentEventId){
   return;
  }
  try{
-  const url='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-upcoming-events?month='+encodeURIComponent(start.slice(0,7));
+  const url='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-upcoming-events?month='+encodeURIComponent(start.slice(0,7));
   const response=await fetch(url,{headers:{Accept:'application/json'},cache:'no-store'});
   if(!response.ok)throw Error('Public calendar unavailable');
   const data=await response.json();
@@ -736,7 +765,7 @@ async function detail(id){
  try{
   const d=await api('detail',null,{id}),r=d.request,p=r.proposed_fields||{},event=d.event||{};
   const submitted={...eventFormValues(event),...p};
-  const effective={...eventFormValues(event),...(r.inspector_edits??p)};
+  const effective={...eventFormValues(event),...(r.inspector_edits??p),division_id:r.division_id};
   const address=[effective.location_address1,effective.location_address2,effective.location_city,effective.location_state,effective.location_zip].filter(Boolean).join(', ')||effective.location_address||'—';
   const pairs=[['Submission ID',r.request_code],['Submission type',nice(r.request_type)],['Submitted',fmt(r.submitted_at)],['Status',nice(r.status)],['Title',effective.title],['Event type',effective.event_type],['Hosting lodge',effective.hosted_by],['District',effective.district?('No. '+effective.district):'—'],['Start',effective.start_local],['End',effective.end_local],['Description',effective.public_description],['Event format',nice(effective.event_mode||'in_person')],['Venue',effective.location_tbd?'Location TBD':effective.location_name],['Address',effective.location_tbd?'Location TBD':address],['Event POC name',effective.poc_name],['Event POC position',effective.poc_position],['Event POC phone',effective.poc_phone],['Event POC email',effective.poc_email],['Cost',effective.cost_details],['Attire',effective.attire],['Attendees',effective.invited_audience],['Registration URL',effective.registration_url],['Payment URL',effective.payment_url],['Flyer / invitation URL',effective.flyer_url],['Cancellation reason',effective.reason],['Contact',r.requester_name],['Email',r.requester_email],['Telephone',r.requester_phone],['Message',r.requester_message]];
   target.innerHTML='<div class="review-title"><div><h2>'+safe(effective.title||nice(r.request_type))+'</h2><p class="muted">'+safe(r.request_code)+'</p></div><span class="chip '+safe(r.status)+'">'+safe(nice(r.status))+'</span></div><div class="detail-grid">'+pairs.map(([k,v])=>'<div><small>'+safe(k)+'</small>'+safe(v??'—')+'</div>').join('')+'</div><h3>Inspector revisions</h3><p class="help">The submitted details remain unchanged. Saved inspector corrections are recorded separately.</p><div id="request-diff"></div><div id="inspector-editor-host"></div><hr><h3>Review &amp; delivery</h3><label>Message to submitter (optional)<textarea id="review-note" rows="2"></textarea></label><div class="review-actions" id="review-actions"></div><div id="delivery-summary"></div><h3>Submission history</h3><div class="timeline" id="item-history"></div>';
@@ -993,7 +1022,8 @@ async function activateInspectorTab(key){
  if($('admin-view').classList.contains('mfa-locked')){
   toast('Complete authenticator verification to access the Inspector Desk.',true);return;
  }
- if((key==='staff'||key==='settings'||key==='lodges'||key==='corrections'||key==='newsletter')&&state.staff?.role!=='admin'){
+ if(['divisions','settings','staff','newsletter'].includes(key)&&state.staff?.regional_role!=='system_admin'){toast('System administrator access is required.',true);return;}
+ if((key==='staff'||key==='settings'||key==='regional-settings'||key==='lodges'||key==='corrections'||key==='newsletter')&&state.staff?.role!=='admin'){
   toast('Administrator access is required to manage newsletters, lodges, inspectors, or settings.',true);
   return;
  }
@@ -1002,7 +1032,7 @@ async function activateInspectorTab(key){
   menu.classList.toggle('active',!!menu.querySelector('.tab.active'));
   menu.open=false;
  });
- for(const k of ['dashboard','import','lodges','corrections','requests','events','resources','history','staff','newsletter','settings'])
+ for(const k of ['dashboard','import','lodges','corrections','requests','events','resources','history','staff','divisions','newsletter','regional-settings','settings'])
   $('tab-'+k).classList.toggle('hidden',k!==key);
  if(key==='dashboard'){await Promise.allSettled([loadDashboard(),window.loadCalendarSync?.(),window.loadWebsitePreview?.()]);}
  if(key==='lodges')await window.loadLodges?.();
@@ -1013,7 +1043,9 @@ async function activateInspectorTab(key){
  if(key==='resources')await window.loadResources?.();
  if(key==='history')await loadHistory(0);
  if(key==='staff')await loadStaff();
+ if(key==='divisions')await loadDivisionDirectory().catch(ex=>toast(ex.message,true));
  if(key==='newsletter')await window.loadNewsletter?.();
+ if(key==='regional-settings')await window.loadRegionalSettings?.();
  if(key==='settings')await Promise.allSettled([loadSettings(),window.loadWebsiteSettings?.(),window.loadNewsletter?.()]);
 }
 all('.tab').forEach(t=>t.onclick=()=>activateInspectorTab(t.dataset.tab));
@@ -1079,35 +1111,71 @@ $('log-action').onchange=()=>loadHistory(0);
 $('history-prev').onclick=()=>loadHistory(historyPage-1);
 $('history-next').onclick=()=>loadHistory(historyPage+1);
 let showRemovedInspectors=false;
-const staffProfileFields=['email','display_name','phone','role','first_name','middle_name','last_name','office_title','district','member_number','home_phone','mobile_phone','home_address','home_address2','city','state','zip'];
+const staffProfileFields=['email','display_name','phone','first_name','middle_name','last_name','member_number','home_phone','mobile_phone','home_address','home_address2','city','state','zip'];
 // Display labels only: role values stay 'inspector'/'admin' for all permission checks.
 function accessLevelLabel(role){return role==='inspector'?'User':role==='admin'?'Admin':nice(role);}
+let staffDivisions=[],staffDistricts=[];
 function inspectorDistrictLabel(s){
- if(s.role==='inspector')return s.district?'District '+s.district:'Inspector at Large';
- return s.district?'District '+s.district:null;
+ if(s.regional_role==='system_admin')return 'System Administrator · All divisions';
+ return (s.assignments||[]).map(a=>{
+  const d=staffDivisions.find(x=>x.id===a.division_id);
+  return (d?.name||'Division '+a.division_id)+' — '+(a.role==='division_admin'?'Division Administrator':'Inspector')+(a.district?' · District '+a.district:a.role==='inspector'?' at Large':'');
+ }).join(' | ')||'No assignments';
+}
+function renderStaffAssignments(assignments=[],systemAdmin=false){
+ const root=$('staff-assignments');root.replaceChildren();
+ root.dataset.systemAdmin=systemAdmin?'1':'0';
+ if(systemAdmin){root.textContent='System Administrator — all divisions automatically. Global access cannot be changed here.';return}
+ for(const d of staffDivisions){
+  const saved=assignments.find(x=>x.division_id===d.id);
+  const row=document.createElement('div');row.className='form-grid';row.style.marginBottom='12px';row.dataset.divisionId=String(d.id);
+  const label=document.createElement('label');label.className='wide checkline';
+  const check=document.createElement('input');check.type='checkbox';check.dataset.assignmentCheck='1';check.checked=!!saved;
+  label.append(check,document.createTextNode(d.name+(d.onboarded?'':' — setup pending')));
+  const roleLabel=document.createElement('label');roleLabel.textContent='Access level';
+  const role=document.createElement('select');role.dataset.assignmentRole='1';
+  for(const [v,t] of [['inspector','Inspector'],['division_admin','Division Administrator']])role.add(new Option(t,v));
+  role.value=saved?.role||'inspector';roleLabel.append(role);
+  const districtLabel=document.createElement('label');districtLabel.textContent='District assignment';
+  const district=document.createElement('select');district.dataset.assignmentDistrict='1';
+  district.add(new Option('Select assignment',''));district.add(new Option('No district / Inspector at Large','at_large'));
+  for(const x of staffDistricts.filter(x=>x.division_id===d.id))district.add(new Option(x.district_name||'District '+x.district_code,x.district_code));
+  if(saved?.district&&!Array.from(district.options).some(o=>o.value===saved.district))district.add(new Option('District '+saved.district+' (inactive)',saved.district));
+  district.value=saved?saved.district||'at_large':'';
+  districtLabel.append(district);
+  function sync(){roleLabel.hidden=districtLabel.hidden=!check.checked;role.disabled=district.disabled=!check.checked;district.required=check.checked;staffFormRequirements()}
+  check.addEventListener('change',sync);role.addEventListener('change',staffFormRequirements);row.append(label,roleLabel,districtLabel);root.append(row);sync();
+ }
+ if(!staffDivisions.length)root.textContent='Division directory unavailable. Refresh the inspector list before saving.';
+}
+function staffAssignments(){
+ return Array.from($('staff-assignments').querySelectorAll('[data-division-id]')).filter(row=>row.querySelector('[data-assignment-check]').checked).map(row=>{
+  const district=row.querySelector('[data-assignment-district]').value;
+  return {division_id:Number(row.dataset.divisionId),role:row.querySelector('[data-assignment-role]').value,district:district==='at_large'?null:district};
+ });
 }
 function staffFormRequirements(){
  const form=$('staff-form');
- const required=form.dataset.editing!=='1'&&form.elements.role.value==='inspector';
- for(const key of ['member_number','first_name','last_name','district','mobile_phone','home_address','city','state','zip']){
-  form.elements[key].required=required;
- }
+ const required=form.dataset.editing!=='1'&&staffAssignments().some(a=>a.role==='inspector');
+ for(const key of ['member_number','first_name','last_name','mobile_phone','home_address','city','state','zip'])form.elements[key].required=required;
 }
 function clearStaffForm(){
  const form=$('staff-form');form.reset();formFeedback(form);
- form.dataset.editing='0';form.elements.email.readOnly=false;
- form.elements.state.value='CA';form.elements.office_title.value='Inspector';
+ form.dataset.editing='0';form.elements.email.readOnly=false;form.elements.enabled.disabled=false;form.elements.expected_updated_at.value='';renderStaffAssignments();
+ form.elements.state.value='CA';
  $('staff-form-mode').textContent='Add Inspector';
  staffFormRequirements();
 }
 $('staff-new').onclick=()=>{clearStaffForm();$('staff-form').scrollIntoView({behavior:'smooth',block:'start'})};
 $('staff-form-clear').onclick=clearStaffForm;
-$('staff-form').elements.role.addEventListener('change',staffFormRequirements);
+$('staff-form').addEventListener('change',staffFormRequirements);
 staffFormRequirements();
 async function loadStaff(){
  const root=$('staff-list');root.textContent='Loading inspectors…';
  try{
   const r=await api('staff');
+  staffDivisions=r.divisions||[];staffDistricts=r.districts||[];
+  if($('staff-form').dataset.editing!=='1')renderStaffAssignments();
   root.replaceChildren();
   const list=(r.items||[]).filter(x=>showRemovedInspectors||!x.removed_at);
   for(const s of list){
@@ -1116,7 +1184,7 @@ async function loadStaff(){
    const name=document.createElement('strong');name.textContent=s.display_name||s.email;
    const meta=document.createElement('small');
    const access=s.removed_at?'Removed on '+new Date(s.removed_at).toLocaleDateString():s.enabled?'Active':'Disabled';
-   meta.textContent=[s.email,accessLevelLabel(s.role),inspectorDistrictLabel(s),s.member_number?'Member '+s.member_number:null,access].filter(Boolean).join(' · ');
+   meta.textContent=[s.email,inspectorDistrictLabel(s),s.member_number?'Member '+s.member_number:null,access].filter(Boolean).join(' · ');
    info.append(name,document.createElement('br'),meta);
    const buttons=document.createElement('div');buttons.className='staff-actions';
    if(s.removed_at){
@@ -1135,8 +1203,10 @@ async function loadStaff(){
     edit.onclick=()=>{
      const form=$('staff-form');
      for(const key of staffProfileFields)form.elements[key].value=s[key]??'';
-      if(s.role==='inspector'&&!s.district)form.elements.district.value='at_large';
      form.elements.enabled.checked=s.enabled;
+     form.elements.enabled.disabled=s.regional_role==='system_admin';
+     form.elements.expected_updated_at.value=s.updated_at||'';
+     renderStaffAssignments(s.assignments||[],s.regional_role==='system_admin');
      form.dataset.editing='1';
      form.elements.email.readOnly=true;
      $('staff-form-mode').textContent='Edit Inspector: '+(s.display_name||s.email);
@@ -1168,7 +1238,7 @@ async function loadStaff(){
        // element (including the editing form and scroll position) untouched.
        s.enabled=result.staff.enabled===true;
        const updatedAccess=s.enabled?'Active':'Disabled';
-       meta.textContent=[s.email,accessLevelLabel(s.role),
+       meta.textContent=[s.email,
         inspectorDistrictLabel(s),
         s.member_number?'Member '+s.member_number:null,
         updatedAccess].filter(Boolean).join(' · ');
@@ -1216,7 +1286,9 @@ $('staff-form').onsubmit=async e=>{
  formFeedback(e.target,'Saving inspector record…','pending');
  try{
   const payload=values(e.target);
-  if(e.target.dataset.editing!=='1'&&payload.role==='inspector'&& !e.target.reportValidity())return;
+  payload.assignments=staffAssignments();payload.enabled=e.target.elements.enabled.checked;payload.expected_updated_at=e.target.elements.expected_updated_at.value||null;
+  if($('staff-assignments').dataset.systemAdmin!=='1'&&!payload.assignments.length)throw Error('Select at least one division');
+  if(!e.target.reportValidity())return;
   const result=await api('staff-save',payload);
   clearStaffForm();
   await loadStaff();
@@ -1224,6 +1296,96 @@ $('staff-form').onsubmit=async e=>{
  }catch(ex){formFeedback(e.target,'Inspector record not saved: '+ex.message,'error')}
  finally{busy(b,false)}
 };
+let divisionDirectoryRows=[],districtDirectoryRows=[],selectedDivisionId=null;
+function selectedDirectoryDivision(){return divisionDirectoryRows.find(d=>d.id===selectedDivisionId)}
+function directoryStatus(message='',error=false){const el=$('directory-status');el.textContent=message;el.classList.toggle('directory-error',error)}
+function showDirectoryEditor(kind){
+ $('division-editor').classList.toggle('hidden',kind!=='division');
+ $('district-editor').classList.toggle('hidden',kind!=='district');
+ $('directory-detail').classList.toggle('hidden',!!kind||!selectedDirectoryDivision());
+ $('directory-empty').classList.toggle('hidden',!!kind||!!selectedDirectoryDivision());
+}
+function directoryButton(label,callback){
+ const b=document.createElement('button');b.type='button';b.className='secondary';b.textContent=label;b.onclick=callback;return b;
+}
+function openDivisionEditor(d=null){
+ const form=$('division-directory-form');form.reset();formFeedback(form);
+ form.elements.operation.value=d?'division_updated':'division_created';
+ form.elements.division_id.readOnly=!!d;form.elements.division_id.value=d?String(d.id):'';
+ form.elements.name.value=d?.name||'';
+ form.elements.display_order.value=String(d?.display_order??(Math.max(0,...divisionDirectoryRows.map(x=>x.display_order))+1));
+ $('division-edit-title').textContent=d?'Edit '+d.name:'Add Division';
+ showDirectoryEditor('division');(d?form.elements.name:form.elements.division_id).focus();
+}
+function openDistrictEditor(d=null){
+ const parent=selectedDirectoryDivision();if(!parent)return;
+ const form=$('district-directory-form');form.reset();formFeedback(form);
+ form.elements.operation.value=d?'district_updated':'district_created';
+ form.elements.division_id.value=String(parent.id);
+ form.elements.district_code.readOnly=!!d;form.elements.district_code.value=d?.district_code||'';
+ form.elements.district_name.value=d?.district_name||'';form.elements.district_name.dataset.custom=d?'1':'';
+ $('district-edit-title').textContent=d?'Edit '+d.district_name:'Add District';
+ $('district-parent-label').textContent='Division: '+parent.name;
+ showDirectoryEditor('district');(d?form.elements.district_name:form.elements.district_code).focus();
+}
+function renderDivisionDirectory(){
+ const root=$('division-directory-list');root.replaceChildren();
+ $('directory-count').textContent=String(divisionDirectoryRows.length);
+ for(const d of divisionDirectoryRows){
+  const n=districtDirectoryRows.filter(x=>x.division_id===d.id).length;
+  const b=document.createElement('button');b.type='button';b.className='directory-division-button';
+  b.setAttribute('aria-pressed',String(d.id===selectedDivisionId));
+  const name=document.createElement('strong'),meta=document.createElement('small');
+  name.textContent=d.name;meta.textContent=(d.onboarded?'Configured':'Setup pending')+' · '+n+' '+(n===1?'district':'districts');
+  b.append(name,meta);b.onclick=()=>{selectedDivisionId=d.id;renderDivisionDirectory();showDirectoryEditor(null)};root.append(b);
+ }
+ if(!divisionDirectoryRows.length)root.textContent='No divisions configured.';
+ const d=selectedDirectoryDivision();showDirectoryEditor(null);if(!d)return;
+ const districts=districtDirectoryRows.filter(x=>x.division_id===d.id);
+ $('directory-selected-name').textContent=d.name;
+ $('directory-selected-meta').textContent=(d.onboarded?'Configured for development':'Setup pending')+' · Division '+d.id+' · Display order '+d.display_order;
+ $('directory-district-count').textContent=String(districts.length);
+ $('directory-lodge-count').textContent=String(d.lodge_count);
+ const list=$('directory-district-list');list.replaceChildren();
+ if(!districts.length){const empty=document.createElement('p');empty.className='directory-empty';empty.textContent='No districts yet. Select Add District to get started.';list.append(empty);return}
+ for(const x of districts){
+  const row=document.createElement('div');row.className='directory-district-row';
+  const info=document.createElement('div'),label=document.createElement('strong'),meta=document.createElement('small');
+  label.textContent=x.district_name;meta.textContent='District number: '+x.district_code+(x.active?'':' · Inactive');
+  info.append(label,meta);row.append(info,directoryButton('Edit',()=>openDistrictEditor(x)));list.append(row);
+ }
+}
+async function loadDivisionDirectory(preferred=selectedDivisionId){
+ const root=$('division-directory-list');directoryStatus('Loading directory…');$('division-add').disabled=true;
+ try{
+  const data=await api('division-directory');divisionDirectoryRows=data.divisions||[];districtDirectoryRows=data.districts||[];
+  selectedDivisionId=divisionDirectoryRows.some(d=>d.id===preferred)?preferred:(divisionDirectoryRows.find(d=>d.onboarded)?.id??divisionDirectoryRows[0]?.id??null);
+  renderDivisionDirectory();directoryStatus();$('division-add').disabled=false;
+ }catch(ex){directoryStatus(ex.message,true);if(!divisionDirectoryRows.length)root.textContent='Unable to load divisions. Select Refresh to try again.';throw ex}
+}
+$('division-add').onclick=()=>openDivisionEditor();
+$('directory-refresh').onclick=()=>loadDivisionDirectory().catch(ex=>toast(ex.message,true));
+$('directory-edit-division').onclick=()=>{const d=selectedDirectoryDivision();if(d)openDivisionEditor(d)};
+$('directory-add-district').onclick=()=>openDistrictEditor();
+$('division-clear').onclick=()=>showDirectoryEditor(null);
+$('district-clear').onclick=()=>showDirectoryEditor(null);
+$('district-directory-form').elements.district_code.addEventListener('input',e=>{
+ const form=e.target.form;if(form.elements.operation.value==='district_created'&&!form.elements.district_name.dataset.custom)form.elements.district_name.value=e.target.value?'District '+e.target.value:'';
+});
+$('district-directory-form').elements.district_name.addEventListener('input',e=>{e.target.dataset.custom=e.target.value?'1':''});
+async function saveDirectoryForm(event,kind){
+ event.preventDefault();const form=event.target,b=event.submitter;busy(b,true);formFeedback(form,'Saving…','pending');
+ try{
+  const operation=form.elements.operation.value,division_id=Number(form.elements.division_id.value);
+  const fields=kind==='division'?{name:form.elements.name.value.trim(),display_order:Number(form.elements.display_order.value)}:{district_code:form.elements.district_code.value.trim(),district_name:form.elements.district_name.value.trim()};
+  const result=await api('division-directory-save',{operation,division_id,fields});
+  try{await loadDivisionDirectory(division_id);directoryStatus(result.message||'Directory entry saved.')}
+  catch{directoryStatus('Saved, but the directory could not refresh. Select Refresh.',true);showDirectoryEditor(null)}
+ }catch(ex){formFeedback(form,'Not saved: '+ex.message,'error')}
+ finally{busy(b,false)}
+}
+$('division-directory-form').onsubmit=e=>saveDirectoryForm(e,'division');
+$('district-directory-form').onsubmit=e=>saveDirectoryForm(e,'district');
 async function loadSettings(){
  try{const s=await api('settings');$('email-links').value=s.settings.public_email_links||''}catch(e){toast(e.message,true)}
 }

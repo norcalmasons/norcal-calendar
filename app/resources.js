@@ -2,7 +2,7 @@
 (()=>{
 const endpoint=ROOT+'/functions/v1/division-resources',bucket='division-inspector-resources';
 const byId=id=>document.getElementById(id);
-let docs=[],categories=[],manage=false,selected=null,busyNow=false,categoryBusy=false;
+let docs=[],categories=[],divisions=[],adminDivisions=[],manageCategories=false,manage=false,selected=null,busyNow=false,categoryBusy=false;
 const make=(tag,cls,label)=>{const el=document.createElement(tag);if(cls)el.className=cls;if(label!==undefined)el.textContent=label;return el};
 const fmtDate=v=>v?new Date(v).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}):'—';
 const size=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB';
@@ -45,7 +45,7 @@ function displayCategories(){
  picker.value=options.includes(oldPicker)?oldPicker:options.includes('General')?'General':options[0]||'';
 }
 async function changeCategory(operation,category,name){
- if(!manage||categoryBusy||busyNow)return;
+ if(!manageCategories||categoryBusy||busyNow)return;
  if(operation==='archive'){
   if(category.name==='General'){categoryNotice('General is the permanent default category.',true);return;}
   if(category.file_count>0){categoryNotice('Move the '+category.file_count+' document(s) in '+category.name+' to another category before retiring it.',true);return;}
@@ -68,7 +68,7 @@ function renderCategoryManager(){
  const root=byId('resources-category-list');
  if(!root)return;
  root.replaceChildren();
- if(!manage)return;
+ if(!manageCategories)return;
  for(const category of [...categories].sort((a,b)=>Number(b.active)-Number(a.active)||a.name.localeCompare(b.name))){
   const row=make('div','resources-category-row');
   const info=make('div','resources-category-info');
@@ -119,8 +119,14 @@ function locked(v){
  }
 }
 function editor(doc){
- if(!manage)return;
+ if(!manage||(doc&&!doc.can_manage))return;
  selected=doc||null;
+ const divisionPicker=byId('resources-document-division');
+ divisionPicker.replaceChildren(new Option('Choose division',''));
+ for(const d of divisions.filter(x=>adminDivisions.includes(x.id)))divisionPicker.add(new Option(d.name,String(d.id)));
+ divisionPicker.value=doc?String(doc.division_id):adminDivisions.length===1?String(adminDivisions[0]):byId('resources-division-filter').value;
+ if(!divisionPicker.value)divisionPicker.value='';
+ divisionPicker.disabled=!!doc;
  byId('resources-editor').classList.remove('hidden');
  editorNotice();
  byId('resources-editor-title').textContent=doc?'Edit document details':'Upload a document';
@@ -166,7 +172,8 @@ async function history(d){
 function visible(){
  const q=byId('resources-search').value.toLowerCase().trim();
  const category=byId('resources-category-filter').value;
- return docs.filter(d=>(category==='All categories'||d.category===category)&&
+ const division=byId('resources-division-filter').value;
+ return docs.filter(d=>(!division||String(d.division_id)===division)&&(category==='All categories'||d.category===category)&&
   (!q||[d.title,d.original_name,d.description,d.category].some(v=>String(v||'').toLowerCase().includes(q))));
 }
 function render(){
@@ -183,7 +190,7 @@ function render(){
   const ico=make('div','resources-file-icon','▤');
   const info=make('div','resources-row-info');
   info.append(make('strong','',d.title),
-   make('small','',d.category+' · '+d.original_name+' · '+size(d.bytes)+' · v'+d.version+' · Updated '+fmtDate(d.updated_at)));
+   make('small','',(divisions.find(x=>x.id===d.division_id)?.name||'Division '+d.division_id)+' · '+d.category+' · '+d.original_name+' · '+size(d.bytes)+' · v'+d.version+' · Updated '+fmtDate(d.updated_at)));
   if(d.description)info.append(make('p','resources-row-description',d.description));
   const controls=make('div','resources-row-actions');
   function add(label,klass,handler){
@@ -191,7 +198,7 @@ function render(){
   }
   add('Download','primary',()=>download(d));
   add('History','secondary',()=>history(d));
-  if(manage){
+  if(d.can_manage){
    add('Edit','secondary',()=>editor(d));
    add('Replace','secondary',()=>{
     if(busyNow)return;
@@ -212,7 +219,14 @@ async function load(){
   const response=await request('list');
   docs=Array.isArray(response.items)?response.items:[];
   categories=Array.isArray(response.categories)?response.categories:[];
-  manage=!!response.can_manage&&state.staff?.role==='admin';
+  divisions=response.divisions||[];adminDivisions=response.admin_divisions||[];
+  manage=!!response.can_manage;manageCategories=!!response.can_manage_categories;
+  const filter=byId('resources-division-filter'),previous=filter.value;
+  filter.replaceChildren(new Option('All assigned divisions',''));
+  for(const d of divisions)filter.add(new Option(d.name,String(d.id)));
+  filter.value=divisions.some(d=>String(d.id)===previous)?previous:'';
+  byId('resources-manage-categories').classList.toggle('hidden',!manageCategories);
+  if(!manageCategories)byId('resources-categories-panel').classList.add('hidden');
   byId('resources-admin-actions').classList.toggle('hidden',!manage);
   if(!manage){
    closeEditor();
@@ -226,7 +240,7 @@ async function load(){
   }
   render();
   renderCategoryManager();
-  alertText('Division IV resource library ready.');
+  alertText('Division resource library ready.');
  }catch(e){root.textContent='Unable to load documents.';alertText(e.message,true)}
 }
 window.loadResources=load;
@@ -237,7 +251,7 @@ function validFile(file){
   throw Error('Use PDF, Word, Excel, PowerPoint, TXT, CSV, JPG or PNG.');
 }
 async function upload(file,old){
- if(busyNow||!manage)return;
+ if(busyNow||!manage||(old&&!old.can_manage))return;
  try{
   editorNotice('Checking document…');
   validFile(file);
@@ -248,6 +262,8 @@ async function upload(file,old){
    if(!yes)return;
    payload.id=old.id;
   }else{
+   payload.division_id=Number(byId('resources-document-division').value);
+   if(!adminDivisions.includes(payload.division_id))throw Error('Select a division for this document.');
    payload.title=byId('resources-document-title').value.trim();
    payload.description=byId('resources-document-description').value.trim();
    payload.category=byId('resources-document-category').value;
@@ -276,7 +292,7 @@ async function upload(file,old){
  finally{locked(false)}
 }
 async function removeDocument(doc){
- if(busyNow||!manage)return;
+ if(busyNow||!doc.can_manage)return;
  const yes=await divisionQuestion('Remove "'+doc.title+'" from the division library? The file remains in private storage as history.',
   {title:'Remove resource',confirmLabel:'Remove',danger:true});
  if(!yes)return;
@@ -289,6 +305,7 @@ async function removeDocument(doc){
 if(!byId('resources-list'))return;
 byId('resources-search').addEventListener('input',render);
 byId('resources-category-filter').addEventListener('change',render);
+byId('resources-division-filter').addEventListener('change',render);
 byId('resources-refresh').onclick=load;
 for(const id of ['resources-document-title','resources-document-category','resources-document-description','resources-file'])
  byId(id).addEventListener('input',()=>editorNotice());
@@ -296,7 +313,7 @@ byId('resources-new').onclick=()=>editor(null);
 byId('resources-cancel-meta').onclick=closeEditor;
 byId('resources-upload').onclick=()=>upload(byId('resources-file').files?.[0],null);
 byId('resources-save-meta').onclick=async()=>{
- if(!manage||!selected||busyNow)return;
+ if(!selected?.can_manage||busyNow)return;
  const payload={id:selected.id,title:byId('resources-document-title').value.trim(),
   category:byId('resources-document-category').value,
   description:byId('resources-document-description').value.trim()};
@@ -310,14 +327,14 @@ byId('resources-save-meta').onclick=async()=>{
  finally{locked(false)}
 };
 byId('resources-manage-categories').onclick=()=>{
- if(!manage)return;
+ if(!manageCategories)return;
  const panel=byId('resources-categories-panel');
  const show=panel.classList.contains('hidden');
  panel.classList.toggle('hidden',!show);
  byId('resources-manage-categories').setAttribute('aria-expanded',String(show));
  if(show){
   renderCategoryManager();
-  categoryNotice('Choose Add Category, Rename, or Retire. Changes affect the whole Division IV library.');
+  categoryNotice('Choose Add Category, Rename, or Retire. Changes affect all division libraries.');
   panel.scrollIntoView({behavior:'smooth',block:'nearest'});
  }
 };
@@ -326,7 +343,7 @@ byId('resources-categories-close').onclick=()=>{
  byId('resources-manage-categories').setAttribute('aria-expanded','false');
 };
 byId('resources-category-add-form').onsubmit=async e=>{
- e.preventDefault();if(!manage||categoryBusy)return;
+ e.preventDefault();if(!manageCategories||categoryBusy)return;
  const input=byId('resources-category-new-name');
  const name=input.value.trim().replace(/\s+/g,' ');
  if(name.length<2||name.length>50){categoryNotice('Category names must be 2–50 characters.',true);return;}

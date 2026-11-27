@@ -3,7 +3,7 @@
  const byId=id=>document.getElementById(id);
  const list=byId('corrections-list'),detail=byId('corrections-detail');
  if(!list||!detail)return;
- const endpoint='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-corrections';
+ const endpoint='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-corrections';
  const status=byId('corrections-status'),notice=byId('corrections-message'),count=byId('corrections-count');
  const names={pending:'Pending',reviewing:'Reviewing',completed:'Completed',rejected:'Rejected'};
  const categories={meeting:'Meeting schedule',location:'Address or location',directory:'Directory information',other:'Other'};

@@ -1,9 +1,12 @@
+import { requireRegionalAdmin, scopeQuery } from '../_shared/regional-auth.mjs';
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 // Division IV correction queue. Public submissions only; every read/update requires live admin + MFA AAL2.
 import {createClient} from 'npm:@supabase/supabase-js@2.57.0';
 
 const db=createClient(Deno.env.get('SUPABASE_URL')!,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   {auth:{persistSession:false,autoRefreshToken:false}});
-const allowed=new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org','https://scottxian.github.io']);
+const allowed=new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 const categories=new Set(['meeting','location','directory']);
 const statuses=new Set(['pending','reviewing','completed','rejected']);
 const isUuid=(s:string)=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
@@ -17,27 +20,7 @@ function reply(body:unknown,status:number,origin:string){
   return new Response(JSON.stringify(body),{status,headers});
 }
 function bad(message:string,status:number,origin:string){return reply({error:message},status,origin)}
-async function requireAdmin(req:Request){
-  const bearer=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');
-  if(!bearer)throw Error('Administrator sign-in required');
-  const {data,error}=await db.auth.getUser(bearer);
-  if(error||!data.user?.email)throw Error('Administrator session expired');
-  const {data:staff,error:staffError}=await db.from('staff_accounts')
-    .select('id,email,role,enabled,removed_at').eq('email',data.user.email.toLowerCase())
-    .eq('enabled',true).is('removed_at',null).maybeSingle();
-  if(staffError||!staff||staff.role!=='admin')throw Error('Administrator access required');
-  const {data:factors,error:factorError}=await db.auth.admin.mfa.listFactors({userId:data.user.id});
-  if(factorError||!Array.isArray(factors?.factors))throw Error('Unable to verify administrator MFA');
-  if(!factors.factors.some((f:any)=>f?.status==='verified'&&['totp','phone'].includes(f.factor_type)))
-    throw Error('An enrolled authenticator is required');
-  let payload:any={};
-  try{
-    const part=bearer.split('.')[1]||'';
-    payload=JSON.parse(atob(part.replace(/-/g,'+').replace(/_/g,'/')));
-  }catch{}
-  if(payload.aal!=='aal2'||payload.sub!==data.user.id)throw Error('Complete MFA verification to continue');
-  return staff;
-}
+async function requireAdmin(req:Request){return await requireRegionalAdmin(db,req)}
 async function publicSubmission(req:Request,origin:string){
   const length=Number(req.headers.get('content-length')||0);
   if(length>6000)return bad('Request too large',413,origin);
@@ -50,7 +33,7 @@ async function publicSubmission(req:Request,origin:string){
   const category=typeof body.category==='string'?body.category:'';
   const contact=typeof body.reply==='string'?body.reply.trim().slice(0,255):'';
   if(lodge.length<2||lodge.length>160||details.length<15||details.length>1600||!categories.has(category))
-    return bad('This form accepts lodge directory corrections only. Event changes and cancellations must use the official calendar request form at divisionivmasons.org/events/',400,origin);
+    return bad('This form accepts lodge directory corrections only. Event changes and cancellations must use the official calendar request form at dev.norcalmasons.org/events/',400,origin);
   if(contact.length>254||/[\r\n<>]/.test(contact))return bad('Invalid reply contact',400,origin);
   const ip=(req.headers.get('cf-connecting-ip')||req.headers.get('x-forwarded-for')||'').split(',')[0].trim().slice(0,100);
   const secret=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||'';
@@ -83,7 +66,7 @@ Deno.serve(async req=>{
   try{
     if(action==='submit'){
       if(req.method!=='POST')return bad('POST required',405,origin);
-      return await publicSubmission(req,origin);
+      return bad('Public correction submissions are disabled in NorCal Dev.',403,origin);
     }
     const staff=await requireAdmin(req); // all other actions private, with MFA
     if(action==='list'){
@@ -91,8 +74,9 @@ Deno.serve(async req=>{
       const status=new URL(req.url).searchParams.get('status')||'open';
       if(!new Set(['open','all',...statuses]).has(status))return bad('Unknown status',400,origin);
       let query=db.from('division_correction_requests')
-        .select('id,lodge_name,category,details,reporter_contact,status,review_notes,created_at,reviewed_at,handled_by')
+        .select('id,division_id,lodge_name,category,details,reporter_contact,status,review_notes,created_at,reviewed_at,handled_by')
         .order('created_at',{ascending:false}).limit(200);
+      query=scopeQuery(query,staff.scope);
       if(status==='open')query=query.in('status',['pending','reviewing']);
       else if(status!=='all')query=query.eq('status',status);
       const {data,error}=await query;if(error)throw error;
@@ -102,6 +86,9 @@ Deno.serve(async req=>{
       if(req.method!=='GET')return bad('GET required',405,origin);
       const id=new URL(req.url).searchParams.get('id')||'';
       if(!isUuid(id))return bad('Invalid correction ID',400,origin);
+      const {data:parent,error:parentError}=await scopeQuery(db.from('division_correction_requests').select('id').eq('id',id),staff.scope).maybeSingle();
+      if(parentError)throw parentError;
+      if(!parent)return bad('Correction request not found',404,origin);
       const {data,error}=await db.from('division_correction_history')
         .select('id,action,previous_status,new_status,notes,actor_staff_id,created_at')
         .eq('correction_id',id).order('created_at',{ascending:false}).limit(80);
@@ -119,17 +106,11 @@ Deno.serve(async req=>{
         return bad('Invalid correction update',400,origin);
       if(status==='completed'&&note.length<8)return bad('Describe the verified lodge directory change before marking completed',400,origin);
       if(status==='rejected'&&note.length<8)return bad('Provide a reason for rejection',400,origin);
-      const {data:updated,error}=await db.from('division_correction_requests')
-        .update({status,review_notes:note,reviewed_at:new Date().toISOString(),handled_by:staff.id})
-        .eq('id',id).eq('status',expected)
-        .select('id,status').maybeSingle();
-      if(error)throw error;
-      if(!updated)return bad('Request changed. Refresh before saving.',409,origin);
-      const {error:historyError}=await db.from('division_correction_history').insert({
-        correction_id:id,action:'status_changed',previous_status:expected,new_status:status,
-        notes:note,actor_staff_id:staff.id
-      });
-      if(historyError){console.error('Correction change log failed',historyError);return reply({ok:true,warning:'Status saved, but history log failed. Contact an administrator.'},200,origin)}
+      const {data:parent,error:parentError}=await scopeQuery(db.from('division_correction_requests').select('id').eq('id',id),staff.scope).maybeSingle();
+      if(parentError)throw parentError;
+      if(!parent)return bad('Correction request not found',404,origin);
+      const {error}=await db.rpc('regional_update_correction',{p_id:id,p_staff_id:staff.id,p_expected:expected,p_status:status,p_note:note});
+      if(error)return bad('Unable to save correction. Refresh and try again.',409,origin);
       return reply({ok:true,notice:'Correction status saved and recorded.'},200,origin);
     }
     return bad('Unknown action',404,origin);

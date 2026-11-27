@@ -1,0 +1,32 @@
+# NorCal Dev only. Do not deploy division-jobs: external integrations are disabled.
+project_id = "ltowvwvryodzrxtpattd"
+
+[functions.division-upcoming-events]
+verify_jwt = false
+
+[functions.division-stated-meetings]
+verify_jwt = false
+
+[functions.division-site-settings]
+verify_jwt = false
+
+[functions.division-lodges]
+verify_jwt = false
+
+[functions.division-calendar]
+verify_jwt = false
+
+[functions.division-corrections]
+verify_jwt = false
+
+[functions.division-bulk]
+verify_jwt = false
+
+[functions.division-resources]
+verify_jwt = false
+
+[functions.division-newsletter]
+verify_jwt = false
+
+[functions.division-jobs]
+verify_jwt = true

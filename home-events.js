@@ -2,7 +2,7 @@
 (()=>{
   const root=document.getElementById('upcoming-events');
   if(!root)return;
-  const endpoint='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-upcoming-events';
+  const endpoint='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-upcoming-events';
   const zone='America/Los_Angeles';
   const maxVisible=4;
   const dateParts=(date, options)=>new Intl.DateTimeFormat('en-US',{timeZone:zone,...options}).format(date);

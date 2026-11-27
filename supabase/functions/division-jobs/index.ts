@@ -1,3 +1,5 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { calendarTitle, calendarNotes, lodgeNumberFromHost } from './calendar-format.mjs';
 const url=Deno.env.get('SUPABASE_URL')!;
@@ -95,7 +97,7 @@ async function sendEmail(job:any){
    'Uploaded by: '+batch.importer_email+'\nFile: '+batch.filename+
    '\nRows reviewed: '+batch.source_count+'\nSubmitted to queue: '+batch.submitted_count+
    '\nSkipped: '+batch.skipped_count+'\nErrors: '+batch.error_count+
-   '\n\nEach submission awaits individual verification and approval. No events were automatically published.\n\nInspector Desk: https://divisionivmasons.org/inspectors/';
+   '\n\nEach submission awaits individual verification and approval. No events were automatically published.\n\nInspector Desk: https://dev.norcalmasons.org/inspectors/';
   const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{authorization:'Bearer '+apiKey,'content-type':'application/json','Idempotency-Key':job.idempotency_key},
     body:JSON.stringify({from,to:[job.recipient_email],subject,text:body})});
   const data=await response.json().catch(()=>({}));
@@ -108,7 +110,7 @@ async function sendEmail(job:any){
  const {data:settings}=await db.from('system_settings').select('setting_value').eq('setting_key','public_email_links').maybeSingle();
  if(!r)throw Error('Request no longer available');
  const {data:event}=r.approved_event_id?await db.from('events').select('*').eq('id',r.approved_event_id).maybeSingle():{data:null};
- const base='https://calendar.divisionivmasons.org/';
+ const base='https://dev.norcalmasons.org/';
  const title=event?.title||r.proposed_fields?.title||'Division IV Calendar submission';
  const linkId=event?.event_code||r.request_code;
  const update=base+'?action=change&id='+encodeURIComponent(linkId);
@@ -166,6 +168,7 @@ async function sendEmail(job:any){
  await db.from('email_deliveries').update({provider_message_id:result.id||null,sent_at:new Date().toISOString()}).eq('id',job.id);
 }
 Deno.serve(async req=>{
+ return j({error:'External calendar and email jobs disabled in NorCal Dev'},503);
  const secret=Deno.env.get('JOB_RUNNER_SECRET');
  if(req.method!=='POST'||!secret||req.headers.get('x-job-secret')!==secret)return j({error:'Not authorized'},401);
  // No queue processing during a read-only Google connection check.
@@ -183,7 +186,7 @@ Deno.serve(async req=>{
  if(action==='test-email'){
    const apiKey=Deno.env.get('RESEND_API_KEY'),from=Deno.env.get('MAIL_FROM');
    if(!apiKey||!from)return j({ok:false,email_test:false,message:'Resend API key or sender address is not configured; no message sent.'},503);
-   const testRecipient='scottyjchristian@gmail.com';
+   const testRecipient='disabled@norcal-dev.invalid';
    const {data:admin,error:adminError}=await db.from('staff_accounts').select('id').eq('email',testRecipient).eq('role','admin').eq('enabled',true).maybeSingle();
    if(adminError||!admin)return j({ok:false,email_test:false,message:'Authorized administrator test recipient not available; no message sent.'},403);
    try{

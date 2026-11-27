@@ -8,7 +8,7 @@
  const next=document.getElementById('home-stated-next');
  if(!root||!heading||!back||!next)return;
  const zone='America/Los_Angeles';
- const endpoint='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-stated-meetings';
+ const endpoint='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-stated-meetings';
  const weekdays=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
  const dateOf=iso=>new Date(iso+'T12:00:00Z');

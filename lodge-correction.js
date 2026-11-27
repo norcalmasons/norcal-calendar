@@ -4,7 +4,7 @@
  if(!form)return;
  const message=document.getElementById('lodge-correction-status');
  const button=form.querySelector('button[type="submit"]');
- const endpoint='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-corrections?action=submit';
+ const endpoint='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-corrections?action=submit';
  const categories={'Meeting schedule':'meeting','Address or location':'location','Directory details':'directory'};
  form.addEventListener('submit',async e=>{
   e.preventDefault();

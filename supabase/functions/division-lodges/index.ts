@@ -1,52 +1,19 @@
+import { requireRegionalAdmin, scopeQuery } from '../_shared/regional-auth.mjs';
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2';
 const url = Deno.env.get('SUPABASE_URL')!;
 const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const db = createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
-const allowedOrigins = new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org',
- 'https://headless-odfdmxtmddz-scottyjchristian-1410.wix-site-host.com',
- 'https://calendar.divisionivmasons.org',
- 'https://scottxian.github.io',
- 'http://localhost:5173','http://127.0.0.1:5173'
-]);
-const publicFields='id,lodge_name,lodge_number,district,address_line1,city,county,state,meeting_day,meeting_time,meeting_notes,official_url,record_version,updated_at';
+const allowedOrigins = new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
+const publicFields='id,division_id,lodge_name,lodge_number,district,venue_name,address_line1,address_line2,zip_code,city,county,state,meeting_day,meeting_time,meeting_notes,official_url,record_version,updated_at';
 function reply(body:unknown,status=200,origin=''){
  const headers:Record<string,string>={'content-type':'application/json; charset=utf-8','cache-control':'no-store','vary':'Origin'};
  if(allowedOrigins.has(origin))headers['access-control-allow-origin']=origin;
  return new Response(JSON.stringify(body),{status,headers});
 }
 function error(message:string,status=400,origin=''){return reply({error:message},status,origin)}
-async function verifiedMfaRequired(user:any,token:string){
- if(!user?.id)throw Error('Authenticated user could not be verified for MFA.');
- // Auth getUser() does not guarantee the MFA enrollment list is present.
- // Server-side Auth Admin is authoritative; lookup failures must deny access.
- const {data,error}=await db.auth.admin.mfa.listFactors({userId:user.id});
- if(error||!Array.isArray(data?.factors)){
-  console.error('Administrator MFA enrollment lookup failed',error?.message||'Unexpected response');
-  throw Error('Unable to verify administrator MFA status. Try again.');
- }
- const enrolled=data.factors.some((f:any)=>f?.status==='verified'&&['totp','phone'].includes(f.factor_type));
- if(!enrolled)throw Error('Set up an authenticator in Account security before using the Inspector Desk.');
- try{
-  const middle=token.split('.')[1]||'';
-  const claims=JSON.parse(atob(middle.replace(/-/g,'+').replace(/_/g,'/')));
-  // Supabase getUser(token) already verified this JWT and identified its user.
-  if(claims.aal==='aal2'&&claims.sub===user.id)return;
- }catch{}
- throw Error('Complete the authenticator verification in Account security.');
-}
-async function inspector(req:Request){
- const bearer=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');
- if(!bearer)throw new Error('Sign in through the Inspector Desk first');
- const {data,error}=await db.auth.getUser(bearer);
- if(error||!data.user?.email)throw new Error('Inspector session expired. Sign in again.');
- const email=data.user.email.toLowerCase();
- const {data:staff,error:staffError}=await db.from('staff_accounts')
-  .select('id,email,display_name,role,district,enabled,removed_at')
-  .eq('email',email).eq('enabled',true).is('removed_at',null).maybeSingle();
- if(staffError||!staff||!['admin','inspector'].includes(staff.role))throw new Error('An enabled inspector account is required');
- await verifiedMfaRequired(data.user,bearer);
- return staff;
-}
+async function inspector(req:Request){return await requireRegionalAdmin(db,req)}
 Deno.serve(async req=>{
  const origin=req.headers.get('origin')||'';
  const cors={'access-control-allow-origin':allowedOrigins.has(origin)?origin:'null',
@@ -70,11 +37,11 @@ Deno.serve(async req=>{
   if(action==='all'){
    if(req.method!=='GET')return error('GET required',405,origin);
    const [lodges, districts, inspectors] = await Promise.all([
-    db.from('lodges').select(publicFields+',active,abbreviation')
-     .order('district',{ascending:true}).order('lodge_name',{ascending:true}).limit(1000),
-    db.from('districts').select('district_code,district_name').eq('active',true).order('district_code'),
-    db.from('staff_accounts').select('district,display_name,role')
-     .eq('enabled',true).is('removed_at',null).not('district','is',null)
+    scopeQuery(db.from('lodges').select(publicFields+',active,abbreviation')
+     .order('district',{ascending:true}).order('lodge_name',{ascending:true}).limit(1000),staff.scope),
+    scopeQuery(db.from('districts').select('district_code,district_name,division_id').eq('active',true).order('district_code'),staff.scope),
+    scopeQuery(db.from('staff_accounts').select('district,display_name,role,division_id')
+     .eq('enabled',true).is('removed_at',null).not('district','is',null),staff.scope)
    ]);
    if(lodges.error)throw lodges.error;
    if(districts.error)throw districts.error;
@@ -90,7 +57,7 @@ Deno.serve(async req=>{
    return reply({
     lodges:lodges.data||[],
     districts:(districts.data||[]).map(d=>({
-      code:d.district_code,name:d.district_name,
+      code:d.district_code,name:d.district_name,division_id:d.division_id,
       inspectors:byDistrict.get(d.district_code)||[]
     })),
     staff:{display_name:staff.display_name,role:staff.role,district:staff.district}
@@ -106,13 +73,16 @@ Deno.serve(async req=>{
       !Number.isInteger(version)||version<1||!b?.fields||typeof b.fields!=='object'||Array.isArray(b.fields))
       return error('Select a lodge and refresh before saving',400,origin);
    const fields:Record<string,string>={};
-   const permitted=['lodge_name','lodge_number','abbreviation','district','address_line1','city','county','state','meeting_day','meeting_time','meeting_notes','official_url'];
+   const permitted=['lodge_name','lodge_number','abbreviation','district','venue_name','address_line1','address_line2','zip_code','city','county','state','meeting_day','meeting_time','meeting_notes','official_url'];
    for(const [k,v] of Object.entries(b.fields)){
     if(!permitted.includes(k))return error('This lodge field cannot be edited',400,origin);
     if(typeof v!=='string'||v.length>1200)return error('Invalid value for '+k,400,origin);
     if(k==='abbreviation'&&Array.from(v.trim()).length>20)return error('Lodge abbreviation cannot exceed 20 characters',400,origin);
     fields[k]=v.trim();
    }
+   const {data:parent,error:parentError}=await scopeQuery(db.from('lodges').select('id').eq('id',id),staff.scope).maybeSingle();
+   if(parentError)throw parentError;
+   if(!parent)return error('Lodge not found',404,origin);
    const {data,error:saveError}=await db.rpc('inspector_update_lodge',
      {p_lodge_id:id,p_staff_id:staff.id,p_expected_version:version,p_fields:fields});
    if(saveError)return error(saveError.message,409,origin);
@@ -122,6 +92,9 @@ Deno.serve(async req=>{
    if(req.method!=='GET')return error('GET required',405,origin);
    const id=new URL(req.url).searchParams.get('id')||'';
    if(!/^[0-9a-f-]{36}$/i.test(id))return error('Invalid lodge ID',400,origin);
+   const {data:parent,error:parentError}=await scopeQuery(db.from('lodges').select('id').eq('id',id),staff.scope).maybeSingle();
+   if(parentError)throw parentError;
+   if(!parent)return error('Lodge not found',404,origin);
    const {data, error:historyError}=await db.from('lodge_change_history')
      .select('id,created_at,previous_version,new_version,actor_staff_id,before_data,after_data')
      .eq('lodge_id',id).order('created_at',{ascending:false}).limit(30);

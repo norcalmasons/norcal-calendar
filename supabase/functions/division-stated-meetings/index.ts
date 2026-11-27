@@ -1,12 +1,11 @@
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 /* Public, read-only subset of the Division IV Lodge Directory.
    Never exposes private lodge-admin fields or uses user-provided SQL. */
 import { createClient } from 'npm:@supabase/supabase-js@2.57.0';
 const db=createClient(Deno.env.get('SUPABASE_URL')!,Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
  {auth:{persistSession:false,autoRefreshToken:false}});
-const origins=new Set([
- 'https://divisionivmasons.org','https://www.divisionivmasons.org',
- 'https://scottxian.github.io','http://localhost:5173','http://127.0.0.1:5173'
-]);
+const origins=new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 function response(payload:unknown,status=200,origin=''){
  return new Response(JSON.stringify(payload),{
   status,headers:{'content-type':'application/json;charset=utf-8','cache-control':'public, max-age=300',

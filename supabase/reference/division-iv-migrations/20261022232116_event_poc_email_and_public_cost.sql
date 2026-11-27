@@ -1,0 +1,1 @@
+alter table public.events add column if not exists poc_email text, add column if not exists cost_details text; comment on column public.events.poc_email is 'Public event point-of-contact email, distinct from requester email'; comment on column public.events.cost_details is 'Optional public pricing or cost details including free, variable or donation';

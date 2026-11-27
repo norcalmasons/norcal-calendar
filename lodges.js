@@ -1,5 +1,5 @@
 (()=>{
- const endpoint='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-lodges?action=public';
+ const endpoint='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-lodges?action=public';
  const search=document.getElementById('lodge-search');
  const district=document.getElementById('district-filter');
  const clear=document.getElementById('clear-filters');

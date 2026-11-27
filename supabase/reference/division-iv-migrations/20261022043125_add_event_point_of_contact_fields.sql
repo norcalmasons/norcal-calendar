@@ -1,0 +1,1 @@
+ALTER TABLE public.events ADD COLUMN IF NOT EXISTS poc_name text, ADD COLUMN IF NOT EXISTS poc_phone text; COMMENT ON COLUMN public.events.poc_name IS 'Public event point-of-contact name, separate from the request submitter'; COMMENT ON COLUMN public.events.poc_phone IS 'Public event point-of-contact phone, separate from the request submitter';

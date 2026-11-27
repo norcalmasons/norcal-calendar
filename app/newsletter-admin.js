@@ -5,7 +5,7 @@
  const root=document.getElementById('tab-newsletter');
  if(!root)return;
  const $=id=>document.getElementById(id);
- const base='https://lxvceqshpjnjjlllbpaq.supabase.co/functions/v1/division-newsletter';
+ const base='https://ltowvwvryodzrxtpattd.supabase.co/functions/v1/division-newsletter';
  let current=null;
  const say=(id,msg,bad=false)=>{
   const el=$(id);if(!el)return;

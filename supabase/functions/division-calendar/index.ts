@@ -1,9 +1,12 @@
+import { lookupIdentity, staffMfaState as regionalMfaState, requireMfa } from '../_shared/regional-auth.mjs';
+// Development-only fail-closed project guard. Remove or parameterize for reviewed production release.
+if (Deno.env.get('SUPABASE_URL') !== 'https://ltowvwvryodzrxtpattd.supabase.co') throw new Error('Wrong project: NorCal Dev only');
 import { createClient } from 'npm:@supabase/supabase-js@2';
 const url = Deno.env.get('SUPABASE_URL')!;
 const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const db = createClient(url, service, {auth:{persistSession:false,autoRefreshToken:false}});
-const publicHosts = new Set(['scottxian.github.io','calendar.divisionivmasons.org','divisionivmasons.org','www.divisionivmasons.org']);
-const allowed = new Set(['https://divisionivmasons.org','https://www.divisionivmasons.org','https://scottxian.github.io','https://calendar.divisionivmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
+const publicHosts = new Set(['dev.norcalmasons.org','localhost','127.0.0.1']);
+const allowed = new Set(['https://dev.norcalmasons.org','http://localhost:5173','http://127.0.0.1:5173']);
 const fields=['title','event_name','calendar_title_override','event_type','hosted_by','district','start_local','end_local','event_mode','location_name','location_address','location_address1','location_address2','location_city','location_state','location_zip','location_tbd','virtual_meeting_url','public_description','attire','invited_audience','registration_url','payment_url','flyer_url','poc_name','poc_position','poc_phone','poc_email','cost_details'];
 const choices=new Set(['new','change','cancel']);
 const locationKeys=['location_name','location_address1','location_address2','location_city','location_state','location_zip'];
@@ -25,15 +28,7 @@ const goodEmail=(x:unknown)=>typeof x==='string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const clean=(s:unknown,n=1000)=>typeof s==='string'?s.trim().slice(0,n):'';
 const localOk=(v:unknown)=>typeof v==='string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(v) && !Number.isNaN(Date.parse(v));
 const parseUrl=(v:unknown)=>{const s=clean(v,1000);if(!s)return '';try{const x=new URL(s);return ['https:','http:'].includes(x.protocol)?x.href:'';}catch{return ''}};
-async function auth(req:Request){
- const token=(req.headers.get('authorization')||'').replace(/^Bearer\s+/i,'');
- if(!token)return {email:'',user:null,staff:null};
- const {data,error}=await db.auth.getUser(token);
- if(error||!data.user?.email) return {email:'',user:null,staff:null};
- const email=data.user.email.toLowerCase();
- const {data:staff}=await db.from('staff_accounts').select('id,email,display_name,role,enabled,phone').eq('email',email).eq('enabled',true).is('removed_at',null).maybeSingle();
- return {email,user:data.user,staff:staff||null,token};
-}
+async function auth(req:Request){return await lookupIdentity(db,req)}
 async function setting(k:string, fallback:any){const {data}=await db.from('system_settings').select('setting_value').eq('setting_key',k).maybeSingle();return data?.setting_value??fallback}
 function sanitize(p:any,patch=false,allowOverride=false){
  const obj:Record<string,unknown>={};
@@ -66,12 +61,12 @@ function sanitize(p:any,patch=false,allowOverride=false){
  if(!patch)checkLocation(obj);
  return obj;
 }
-async function resolveSubmittedTitle(obj:any,fallback=''){
+async function resolveSubmittedTitle(obj:any,divisionId:number,fallback=''){
  if(!obj.event_name&&!obj.calendar_title_override
   && !['District School of Instruction','Division School of Instruction'].includes(String(obj.event_type||'')))
   return obj; // untouched legacy non-SOI title
- const {data,error}=await db.rpc('resolve_calendar_title',{
-  p_event_name:obj.event_name||null,p_hosted_by:obj.hosted_by||null,
+ const {data,error}=await db.rpc('regional_resolve_calendar_title',{
+  p_division:divisionId,p_event_name:obj.event_name||null,p_hosted_by:obj.hosted_by||null,
   p_event_type:obj.event_type||null,p_district:obj.district||null,
   p_override:obj.calendar_title_override||null,p_fallback:obj.title||fallback||null
  });
@@ -79,38 +74,35 @@ async function resolveSubmittedTitle(obj:any,fallback=''){
  obj.title=data;
  return obj;
 }
-function code(){return 'DIV4-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase()}
-async function eventForCode(c:string){
- const {data:e}=await db.from('events').select('*').eq('event_code',c).maybeSingle();
+function code(divisionId:number){return 'DIV'+divisionId+'-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+crypto.randomUUID().slice(0,8).toUpperCase()}
+async function eventForCode(c:string,scope:number[]|null=null){
+ const within=(q:any)=>scope===null?q:q.in('division_id',scope);
+ const {data:e}=await within(db.from('events').select('*').eq('event_code',c)).maybeSingle();
  if(e)return e;
- const {data:r}=await db.from('event_requests').select('approved_event_id').eq('request_code',c).maybeSingle();
+ const {data:r}=await within(db.from('event_requests').select('approved_event_id').eq('request_code',c)).maybeSingle();
  if(!r?.approved_event_id)return null;
- const {data:event}=await db.from('events').select('*').eq('id',r.approved_event_id).maybeSingle();
+ const {data:event}=await within(db.from('events').select('*').eq('id',r.approved_event_id)).maybeSingle();
  return event;
 }
-async function staffMfaState(user:any,token:string){
- if(!user?.id)throw Error('Authenticated user could not be verified for MFA.');
- const {data,error}=await db.auth.admin.mfa.listFactors({userId:user.id});
- if(error||!Array.isArray(data?.factors)){
-  console.error('Administrator MFA enrollment lookup failed',error?.message||'Unexpected response');
-  throw Error('Unable to verify staff MFA status. Try again.');
- }
- const factor=data.factors.find((f:any)=>f?.status==='verified'&&['totp','phone'].includes(f.factor_type));
- if(!factor)return {required:true,verified:false,needsEnrollment:true};
- const factorId=String(factor.id||'');
- try{
-  const middle=token.split('.')[1]||'';
-  const claims=JSON.parse(atob(middle.replace(/-/g,'+').replace(/_/g,'/')));
-  if(claims.aal==='aal2'&&claims.sub===user.id)return {required:true,verified:true,factorId};
- }catch{}
- return {required:true,verified:false,factorId};
-}
-async function verifiedMfaRequired(user:any,token:string){
- const state=await staffMfaState(user,token);
- if(state.required&&!state.verified)throw Error(state.needsEnrollment?'Set up an authenticator in Account security before using the Inspector Desk.':'Complete authenticator verification in Account security before accessing the Inspector Desk.');
-}
+async function staffMfaState(user:any,token:string){return await regionalMfaState(db,user,token)}
+async function verifiedMfaRequired(user:any,token:string){return await requireMfa(db,user,token)}
 function requiredStaff(a:any){if(!a.staff)throw Error('Inspector login required or account disabled');return a.staff}
 function requiredAdmin(a:any){const s=requiredStaff(a);if(s.role!=='admin')throw Error('Administrator access required');return s}
+const scopedActions=new Set(['requests','detail','dashboard','calendar-sync-overview','events','event-detail','audit','event-scope','inspector-edit','inspector-publish-edit','calendar-retry','event-undo','inspector-cancel-event','review']);
+function parseDivision(value:unknown):number|null{
+ if(value===null||value===undefined||value==='')return null;
+ if(!/^[1-9][0-9]{0,4}$/.test(String(value))||Number(value)>32767)throw Error('Invalid division selection');
+ return Number(value);
+}
+async function eventScope(staff:any,requested:number|null,adminOnly=false):Promise<number[]>{
+ const {data,error}=await db.rpc('regional_event_divisions',{p_staff:staff.id,p_requested:requested,p_admin_only:adminOnly});
+ if(error||!Array.isArray(data)||!data.length||data.some(x=>!Number.isInteger(x)||x<1))throw Error('Staff access required for this division');
+ return data;
+}
+async function validateDistrict(divisionId:number,eventType:any,district:any){
+ const {error}=await db.rpc('regional_validate_event_district',{p_division:divisionId,p_type:String(eventType||''),p_district:district===null||district===undefined?null:String(district)});
+ if(error)throw Error('Choose an active district in this division');
+}
 Deno.serve(async req=>{
  const origin=req.headers.get('origin')||'';
  if(req.method==='OPTIONS')return new Response(null,{status:204,headers:{'access-control-allow-origin':allowed.has(origin)?origin:'null','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'authorization,content-type,apikey,x-client-info','access-control-max-age':'3600','vary':'Origin'}});
@@ -118,11 +110,24 @@ Deno.serve(async req=>{
  try{
   const u=new URL(req.url), action=u.searchParams.get('action')||'config';
   const a=await auth(req);
-  if(a.staff && !['config','me','locate','submit'].includes(action)) await verifiedMfaRequired(a.user,a.token);
+  if(a.staff && !['config','me'].includes(action)) await verifiedMfaRequired(a.user,a.token);
+  // Keep the transitional system-admin-only gateway during regional conversion.
+  const scopedAction=scopedActions.has(action)||((action==='submit'||action==='locate')&&!!a.staff);
+  const requestedDivision=scopedAction?parseDivision(u.searchParams.get('division_id')):null;
+  const scope=scopedAction?await eventScope(requiredStaff(a),requestedDivision,action==='event-undo'):[];
+  if(action==='event-scope'){
+   const {data,error}=await db.from('divisions').select('id,name').in('id',scope).order('display_order');
+   if(error)throw Error('Division directory unavailable');
+   return json({divisions:data||[]},200,origin);
+  }
   if(action==='config'){
-   const [types,enabled,districts,hosts,lodges,positions]=await Promise.all([db.from('event_types').select('label').eq('enabled',true).order('sort_order'),setting('public_submissions_enabled',false),setting('district_numbers',[]),db.from('events').select('hosted_by,location_name,location_city,attire,invited_audience,cost_details').eq('status','active').order('created_at',{ascending:false}).limit(1000),db.from('lodges').select('lodge_name,lodge_number,abbreviation').eq('active',true).limit(1000),db.from('poc_positions').select('title').eq('active',true).order('sort_order',{ascending:true}).order('title')]);
+   const {data:divisions,error:divisionError}=await db.from('divisions').select('id,name,display_order').eq('onboarded',true).order('display_order');
+   if(divisionError)throw Error('Division directory unavailable');
+   const ids=(divisions||[]).map(d=>d.id);
+   const [types,enabled,districts,hosts,lodges,positions]=await Promise.all([db.from('event_types').select('label').eq('enabled',true).order('sort_order'),setting('public_submissions_enabled',false),db.from('districts').select('district_code,district_name,division_id').eq('active',true).in('division_id',ids).order('district_code'),db.from('events').select('hosted_by,location_name,location_city,attire,invited_audience,cost_details').in('division_id',ids).eq('status','active').order('created_at',{ascending:false}).limit(1000),db.from('lodges').select('lodge_name,lodge_number,abbreviation,district,division_id').in('division_id',ids).eq('active',true).limit(1000),db.from('poc_positions').select('title').eq('active',true).order('sort_order',{ascending:true}).order('title')]);
+   if(districts.error||lodges.error)throw Error('District or lodge directory unavailable');
    const publicSuggestions=(field:string)=>[...new Set((hosts.data||[]).map((x:any)=>String(x[field]||'').trim()).filter(Boolean))].slice(0,100);
-   return json({event_types:(types.data||[]).map((x:any)=>x.label),districts,suggestions:{venue:publicSuggestions('location_name'),city:publicSuggestions('location_city'),attire:publicSuggestions('attire'),audience:publicSuggestions('invited_audience'),cost:publicSuggestions('cost_details'),position:(positions.data||[]).map((x:any)=>x.title)},lodge_titles:(lodges.data||[]).map((x:any)=>({name:x.lodge_name,number:x.lodge_number,abbreviation:x.abbreviation})),hosts:[...(hosts.data||[]).map((x:any)=>x.hosted_by),...(lodges.data||[]).map((x:any)=>[x.lodge_name,x.lodge_number?'No. '+x.lodge_number:''].filter(Boolean).join(' '))].filter(Boolean),public_submissions_enabled:enabled,turnstile_site_key:Deno.env.get('TURNSTILE_SITE_KEY')||null,turnstile_ready:Boolean(Deno.env.get('TURNSTILE_SITE_KEY')&&Deno.env.get('TURNSTILE_SECRET')),logged_in:!!a.user,staff:a.staff},200,origin);
+   return json({event_types:(types.data||[]).map((x:any)=>x.label),divisions:divisions||[],district_directory:districts.data||[],districts:(districts.data||[]).map(d=>d.district_code),suggestions:{venue:publicSuggestions('location_name'),city:publicSuggestions('location_city'),attire:publicSuggestions('attire'),audience:publicSuggestions('invited_audience'),cost:publicSuggestions('cost_details'),position:(positions.data||[]).map((x:any)=>x.title)},lodge_titles:(lodges.data||[]).map((x:any)=>({name:x.lodge_name,number:x.lodge_number,abbreviation:x.abbreviation,district:x.district,division_id:x.division_id})),hosts:[...(hosts.data||[]).map((x:any)=>x.hosted_by),...(lodges.data||[]).map((x:any)=>[x.lodge_name,x.lodge_number?'No. '+x.lodge_number:''].filter(Boolean).join(' '))].filter(Boolean),public_submissions_enabled:enabled,turnstile_site_key:Deno.env.get('TURNSTILE_SITE_KEY')||null,turnstile_ready:Boolean(Deno.env.get('TURNSTILE_SITE_KEY')&&Deno.env.get('TURNSTILE_SECRET')),logged_in:!!a.user,staff:a.staff?{role:a.staff.role,display_name:a.staff.display_name}:null},200,origin);
   }
   if(action==='me'){
    const mfa=a.staff?await staffMfaState(a.user,a.token):null;
@@ -136,11 +141,11 @@ Deno.serve(async req=>{
   if(action==='locate'){
    if(!a.user)throw Error('Verify your email using the sign-in link first');
    const key=clean(u.searchParams.get('code'),80).toUpperCase();
-   const e=await eventForCode(key);
+   const e=await eventForCode(key,a.staff?scope:null);
    if(!e)throw Error('Event not found. Check the Submission ID.');
    const {data:r}=await db.from('event_requests').select('requester_email').eq('approved_event_id',e.id).eq('request_type','new').maybeSingle();
    if(!a.staff && r?.requester_email!==a.email)throw Error('Sign in using the email address from the original submission');
-   const pub=Object.fromEntries(['id','event_code',...fields,'version','status','starts_at','ends_at'].map(k=>[k,e[k]]));
+   const pub=Object.fromEntries(['id','division_id','event_code',...fields,'version','status','starts_at','ends_at'].map(k=>[k,e[k]]));
    return json({event:pub},200,origin);
   }
   if(action==='submit'){
@@ -148,7 +153,7 @@ Deno.serve(async req=>{
    const body=await req.json(),kind=body.kind||'new';
    if(!choices.has(kind))throw Error('Unknown submission type');
    const enabled=await setting('public_submissions_enabled',false);
-   if(!enabled&&!a.staff)throw Error('Public submissions are in test mode. Please try again later.');
+   if(!a.staff)throw Error('Public submissions are disabled in NorCal Dev.');
    const requester_email=clean(body.email,250).toLowerCase();
    if(!goodEmail(requester_email))throw Error('Enter a valid contact email');
    const requester_name=clean(body.name,150);
@@ -165,57 +170,66 @@ Deno.serve(async req=>{
      if(limitError)throw Error('Unable to confirm submission limit. Please try again later.');
      if((recentSubmissions||0)>=20)throw Error('Too many event submissions from this email address. Please wait an hour before trying again.');
    }
-   let event_id=null, base_event_version=null, proposed_fields:any={};
+   let event_id=null, base_event_version=null, proposed_fields:any={},divisionId:number;
+   const bodyDivision=parseDivision(body.division_id);
+   if(bodyDivision!==null&&!scope.includes(bodyDivision))throw Error('Staff access required for this division');
    if(kind==='new'){
      proposed_fields=sanitize(body.event||{});
+     const {data:resolved,error:routingError}=await db.rpc('regional_resolve_event_division',{p_district:proposed_fields.district||null,p_type:proposed_fields.event_type,p_division:bodyDivision,p_host:proposed_fields.hosted_by||null});
+     if(routingError||!Number.isInteger(resolved))throw Error(routingError?.message||'Unable to determine division');
+     if(!scope.includes(resolved))throw Error('Staff access required for this division');
+     divisionId=resolved;
      // Public submissions need details; inspector-managed imports stay compatible with legacy records.
      if(!a.staff&&!clean(proposed_fields.public_description))throw Error('Enter a public event description');
      if(!proposed_fields.event_name
     && !['District School of Instruction','Division School of Instruction'].includes(String(proposed_fields.event_type)))
     throw Error('Enter the event name');
-     await resolveSubmittedTitle(proposed_fields);
-     const districts=await setting('district_numbers',[]);
-     if(kind==='new' && proposed_fields.event_type!=='Division School of Instruction'&&!districts.includes(String(proposed_fields.district)))throw Error('Choose a valid district number');
+     await resolveSubmittedTitle(proposed_fields,divisionId);
+     await validateDistrict(divisionId,proposed_fields.event_type,proposed_fields.district);
      const types=await db.from('event_types').select('label').eq('label',proposed_fields.event_type).maybeSingle();
      if(!types.data)throw Error('Select a valid event type');
      if(!enabled && a.staff && requester_email!==a.email)throw Error('Use your own email address during test mode');
    }else{
      if(!a.user||(!a.staff&&requester_email!==a.email))throw Error('Verify the original submission contact email first');
-     const e=await eventForCode(clean(body.request_code,80).toUpperCase());
+     const e=await eventForCode(clean(body.request_code,80).toUpperCase(),scope);
      if(!e)throw Error('Original Submission ID not found');
      if(e.status!=='active')throw Error('This event is already cancelled');
      const {data:orig}=await db.from('event_requests').select('requester_email').eq('request_type','new').eq('approved_event_id',e.id).maybeSingle();
      if(!a.staff&&orig?.requester_email!==a.email)throw Error('Use the email address from the original submission');
+     divisionId=e.division_id;
+     if(bodyDivision!==null&&bodyDivision!==divisionId)throw Error('Submission division does not match the event');
      event_id=e.id;base_event_version=e.version;
      if(kind==='change'){
        proposed_fields=sanitize(body.changes||{},true);
        if(!Object.keys(proposed_fields).length)throw Error('There are no changes to submit');
-       if(Object.hasOwn(proposed_fields,'district')){
-         const districts=await setting('district_numbers',[]);
-         if((proposed_fields.event_type||e.event_type)!=='Division School of Instruction'&&!districts.includes(String(proposed_fields.district)))throw Error('Choose a valid district number');
-       }
+       if(Object.hasOwn(proposed_fields,'district')||Object.hasOwn(proposed_fields,'event_type'))await validateDistrict(divisionId,proposed_fields.event_type??e.event_type,proposed_fields.district??e.district);
        if(locationKeys.some(k=>Object.hasOwn(proposed_fields,k))||Object.hasOwn(proposed_fields,'location_tbd')||Object.hasOwn(proposed_fields,'virtual_meeting_url')||Object.hasOwn(proposed_fields,'event_mode')){
          checkLocation({...e,...proposed_fields});
        }
      }
      else proposed_fields={reason:clean(body.reason,2000)};
    }
-   const request_code=code();
+   const request_code=code(divisionId);
    const {data,error}=await db.from('event_requests').insert({
-     request_code,event_id,request_type:kind,base_event_version,proposed_fields,
+     division_id:divisionId,request_code,event_id,request_type:kind,base_event_version,proposed_fields,
      requester_name,requester_email,requester_phone:clean(body.phone,50),
      requester_message:clean(body.message,2000)
    }).select('id,request_code').single();
    if(error)throw Error('Unable to save submission: '+error.message);
    await db.from('email_deliveries').insert({request_id:data.id,message_type:'acknowledgment',recipient_email:requester_email,idempotency_key:data.id+':ack'});
-   const {data:reviewers}=await db.from('staff_accounts').select('email').eq('enabled',true);
-   if(reviewers?.length)await db.from('email_deliveries').insert(reviewers.map((s:any)=>({request_id:data.id,message_type:'reviewer_notification',recipient_email:s.email,idempotency_key:data.id+':reviewer:'+s.email})));
+   const {data:members,error:memberError}=await db.from('staff_division_assignments').select('staff_id').eq('division_id',divisionId);
+   if(memberError)console.error('Unable to find division reviewers',memberError.message);
+   else if(members?.length){
+    const {data:reviewers,error:reviewerError}=await db.from('staff_accounts').select('email').in('id',members.map(x=>x.staff_id)).eq('enabled',true).is('removed_at',null);
+    if(reviewerError)console.error('Unable to find active division reviewers',reviewerError.message);
+    else if(reviewers?.length)await db.from('email_deliveries').insert([...new Set(reviewers.map(x=>x.email))].map(email=>({request_id:data.id,message_type:'reviewer_notification',recipient_email:email,idempotency_key:data.id+':reviewer:'+email})));
+   }
    await db.from('event_history').insert({event_id,request_id:data.id,action:'submitted',actor_email:requester_email,after_data:{kind}});
    return json({ok:true,request_code:data.request_code,message:'Calendar submission received for inspector verification and publication. The lodge retains responsibility for scheduling its activity.'},201,origin);
   }
   if(action==='requests'){
    requiredStaff(a);
-   let q=db.from('request_index').select('*',{count:'exact'}).order('submitted_at',{ascending:false});
+   let q=db.from('regional_request_index').select('*',{count:'exact'}).in('division_id',scope).order('submitted_at',{ascending:false});
    const st=u.searchParams.get('status');
    if(st&&st!=='all')q=q.eq('status',st);
    const from=u.searchParams.get('from'),to=u.searchParams.get('to');
@@ -236,12 +250,12 @@ Deno.serve(async req=>{
   if(action==='detail'){
    requiredStaff(a);
    const id=u.searchParams.get('id')||'';
-   const {data,error}=await db.from('event_requests').select('*').eq('id',id).single();
+   const {data,error}=await db.from('event_requests').select('*').in('division_id',scope).eq('id',id).single();
    if(error||!data)throw Error('Submission not found');
    const [event,history,calendar,email]=await Promise.all([
-     (data.approved_event_id||data.event_id)?db.from('events').select('*').eq('id',data.approved_event_id||data.event_id).maybeSingle():Promise.resolve({data:null}),
-     db.from('event_history').select('*').eq('request_id',id).order('occurred_at',{ascending:false}),
-     (data.approved_event_id||data.event_id)?db.from('calendar_jobs').select('status,action,created_at,last_error,event_version,finished_at').eq('event_id',data.approved_event_id||data.event_id).order('created_at',{ascending:false}).limit(12):db.from('calendar_jobs').select('status,action,created_at,last_error,event_version,finished_at').eq('request_id',id).order('created_at',{ascending:false}).limit(12),
+     (data.approved_event_id||data.event_id)?db.from('events').select('*').in('division_id',scope).eq('id',data.approved_event_id||data.event_id).maybeSingle():Promise.resolve({data:null}),
+     db.from('regional_event_history').select('*').in('division_id',scope).eq('request_id',id).order('occurred_at',{ascending:false}),
+     (data.approved_event_id||data.event_id)?db.from('regional_calendar_jobs').select('status,action,created_at,last_error,event_version,finished_at').in('division_id',scope).eq('event_id',data.approved_event_id||data.event_id).order('created_at',{ascending:false}).limit(12):db.from('regional_calendar_jobs').select('status,action,created_at,last_error,event_version,finished_at').in('division_id',scope).eq('request_id',id).order('created_at',{ascending:false}).limit(12),
      db.from('email_deliveries').select('message_type,status,recipient_email,last_error').eq('request_id',id)
    ]);
    return json({request:data,event:event.data,history:history.data||[],calendar:calendar.data||[],email:email.data||[]},200,origin);
@@ -250,18 +264,17 @@ Deno.serve(async req=>{
    if(req.method!=='POST')return err('POST required',405,origin);
    const staff=requiredStaff(a),b=await req.json();
    const id=clean(b.id,60);
-   const {data:r,error:readError}=await db.from('event_requests').select('id,request_type,status,event_id,edit_version').eq('id',id).maybeSingle();
+   const {data:r,error:readError}=await db.from('event_requests').select('id,division_id,request_type,status,event_id,edit_version').in('division_id',scope).eq('id',id).maybeSingle();
    if(readError||!r)throw Error('Submission not found');
    if(!['pending','needs_correction'].includes(r.status)||!['new','change'].includes(r.request_type))throw Error('This submission cannot be edited');
    const input=sanitize(b.fields||{},false,true);
-   await resolveSubmittedTitle(input);
-   const districts=await setting('district_numbers',[]);
-   if(input.event_type!=='Division School of Instruction'&&!districts.includes(String(input.district)))throw Error('Choose a valid district');
+   await resolveSubmittedTitle(input,r.division_id);
+   await validateDistrict(r.division_id,input.event_type,input.district);
    const {data:eventType}=await db.from('event_types').select('label').eq('label',input.event_type).eq('enabled',true).maybeSingle();
    if(!eventType)throw Error('Choose a valid event type');
    let draft:any=input;
    if(r.request_type==='change'){
-     const {data:current,error:eventError}=await db.from('events').select('*').eq('id',r.event_id).maybeSingle();
+     const {data:current,error:eventError}=await db.from('events').select('*').in('division_id',scope).eq('id',r.event_id).maybeSingle();
      if(eventError||!current||current.status!=='active')throw Error('Published event is no longer active');
      const changes:Record<string,unknown>={};
      const base:any={...current,
@@ -285,10 +298,11 @@ Deno.serve(async req=>{
    const staff=requiredStaff(a),body=await req.json();
    const id=clean(body.id,60),version=Number(body.expected_version);
    if(!Number.isInteger(version)||version<1)throw Error('Reload the event before editing');
+   const {data:parent,error:parentError}=await db.from('events').select('division_id').in('division_id',scope).eq('id',id).maybeSingle();
+   if(parentError||!parent)throw Error('Published event not found');
    const payload=sanitize(body.fields||{},false,true);
-   await resolveSubmittedTitle(payload);
-   const districts=await setting('district_numbers',[]);
-   if(payload.event_type!=='Division School of Instruction'&&!districts.includes(String(payload.district)))throw Error('Select a valid district');
+   await resolveSubmittedTitle(payload,parent.division_id);
+   await validateDistrict(parent.division_id,payload.event_type,payload.district);
    const {data:eventType}=await db.from('event_types').select('label').eq('label',payload.event_type).eq('enabled',true).maybeSingle();
    if(!eventType)throw Error('Choose a valid event type');
    if(!['in_person','hybrid','online'].includes(String(payload.event_mode)))throw Error('Select a valid event format');
@@ -299,7 +313,7 @@ Deno.serve(async req=>{
   }
   if(action==='dashboard'){
    requiredStaff(a);
-   const {data,error}=await db.rpc('inspector_dashboard_data');
+   const {data,error}=await db.rpc('regional_inspector_dashboard_data',{p_staff:a.staff.id,p_requested:requestedDivision});
    if(error)throw Error(error.message);
    return json(data||{counts:{pending:0,corrections:0,failed:0,queued:0},requests:[],failures:[],recent:[]},200,origin);
   }
@@ -307,8 +321,8 @@ Deno.serve(async req=>{
    requiredStaff(a);
    if(req.method!=='GET')return err('GET required',405,origin);
    const [events,jobs]=await Promise.all([
-     db.from('events').select('id,event_code,title,status,version,google_event_id,calendar_last_synced_at').order('updated_at',{ascending:false}).limit(2500),
-     db.from('calendar_jobs').select('event_id,status,action,event_version,created_at,finished_at,last_error')
+     db.from('events').select('id,event_code,title,status,version,google_event_id,calendar_last_synced_at').in('division_id',scope).order('updated_at',{ascending:false}).limit(2500),
+     db.from('regional_calendar_jobs').select('event_id,status,action,event_version,created_at,finished_at,last_error').in('division_id',scope)
        .order('created_at',{ascending:false}).limit(5000)
    ]);
    if(events.error)throw Error('Cannot load calendar events: '+events.error.message);
@@ -344,6 +358,8 @@ Deno.serve(async req=>{
    const staff=requiredStaff(a),b=await req.json();
    const version=Number(b.expected_version);
    if(!Number.isInteger(version)||version<1)throw Error('Reload event before retry');
+   const {data:parent,error:parentError}=await db.from('events').select('id').in('division_id',scope).eq('id',clean(b.id,80)).maybeSingle();
+   if(parentError||!parent)throw Error('Published event not found');
    const {data,error}=await db.rpc('inspector_retry_calendar_sync',
       {p_event_id:clean(b.id,80),p_staff:staff.id,p_expected_version:version});
    if(error)throw Error(error.message);
@@ -354,6 +370,8 @@ Deno.serve(async req=>{
    const admin=requiredAdmin(a),b=await req.json();
    const version=Number(b.expected_version);
    if(!Number.isInteger(version)||version<1)throw Error('Reload event before undo');
+   const {data:parent,error:parentError}=await db.from('events').select('id').in('division_id',scope).eq('id',clean(b.id,80)).maybeSingle();
+   if(parentError||!parent)throw Error('Published event not found');
    const {data,error}=await db.rpc('admin_undo_last_published_edit',
      {p_event_id:clean(b.id,80),p_history_id:clean(b.history_id,80),
       p_staff:admin.id,p_expected_version:version});
@@ -365,7 +383,7 @@ Deno.serve(async req=>{
    const term=clean(u.searchParams.get('search'),100).replace(/[%,()]/g,'');
    const status=clean(u.searchParams.get('status'),20);
    const pg=Math.max(0,Math.min(1000,Number(u.searchParams.get('page'))||0));
-   let q=db.from('events').select('id,event_code,title,event_type,hosted_by,district,starts_at,ends_at,status,google_event_id,calendar_last_synced_at,version,location_name,location_city',{count:'exact'}).order('starts_at',{ascending:false});
+   let q=db.from('events').select('id,division_id,event_code,title,event_type,hosted_by,district,starts_at,ends_at,status,google_event_id,calendar_last_synced_at,version,location_name,location_city',{count:'exact'}).in('division_id',scope).order('starts_at',{ascending:false});
    if(status==='active'||status==='cancelled')q=q.eq('status',status);
    if(term)q=q.or('title.ilike.%'+term+'%,event_code.ilike.%'+term+'%,hosted_by.ilike.%'+term+'%');
    const {data,count,error}=await q.range(pg*50,pg*50+49);
@@ -373,8 +391,7 @@ Deno.serve(async req=>{
    const ids=(data||[]).map((x:any)=>x.id);
    let latest=new Map<string,any>();
    if(ids.length){
-     const {data:jobs,error:jobError}=await db.from('calendar_jobs')
-       .select('event_id,status,action,event_version,last_error,created_at,finished_at')
+     const {data:jobs,error:jobError}=await db.from('regional_calendar_jobs').select('event_id,status,action,event_version,last_error,created_at,finished_at').in('division_id',scope)
        .in('event_id',ids).order('created_at',{ascending:false}).limit(500);
      if(jobError)throw Error(jobError.message);
      for(const job of jobs||[]){if(!latest.has(job.event_id))latest.set(job.event_id,job)}
@@ -384,13 +401,13 @@ Deno.serve(async req=>{
   if(action==='event-detail'){
    requiredStaff(a);
    const id=clean(u.searchParams.get('id'),60);
-   const {data:event,error}=await db.from('events').select('*').eq('id',id).maybeSingle();
+   const {data:event,error}=await db.from('events').select('*').in('division_id',scope).eq('id',id).maybeSingle();
    if(error||!event)throw Error('Published event not found');
    const [jobs,hist]=await Promise.all([
-     db.from('calendar_jobs').select('action,status,finished_at,last_error,event_version,created_at').eq('event_id',id).order('created_at',{ascending:false}).limit(12),
-     db.from('event_history').select('id,request_id,action,actor_email,occurred_at,before_data,after_data,notes').eq('event_id',id).order('occurred_at',{ascending:false}).limit(30)]);
+     db.from('regional_calendar_jobs').select('action,status,finished_at,last_error,event_version,created_at').in('division_id',scope).eq('event_id',id).order('created_at',{ascending:false}).limit(12),
+     db.from('regional_event_history').select('id,request_id,action,actor_email,occurred_at,before_data,after_data,notes').in('division_id',scope).eq('event_id',id).order('occurred_at',{ascending:false}).limit(30)]);
    const requestIds=[...new Set((hist.data||[]).map((x:any)=>x.request_id).filter(Boolean))];
-   const requests=requestIds.length?await db.from('event_requests').select('id,request_code,request_type').in('id',requestIds):{data:[],error:null};
+   const requests=requestIds.length?await db.from('event_requests').select('id,request_code,request_type').in('division_id',scope).in('id',requestIds):{data:[],error:null};
    if(requests.error)throw Error(requests.error.message);
    const requestMap=new Map((requests.data||[]).map((x:any)=>[x.id,x]));
    const entries=(hist.data||[]).map((x:any)=>({...x,request_type:requestMap.get(x.request_id)?.request_type||null,
@@ -402,16 +419,16 @@ Deno.serve(async req=>{
    const staff=requiredStaff(a),body=await req.json();
    const id=clean(body.event_id,80),reason=clean(body.reason,2000);
    if(!reason)throw Error('Enter a cancellation reason');
-   const {data:event,error:lookupError}=await db.from('events').select('id,event_code,status,version').eq('id',id).maybeSingle();
+   const {data:event,error:lookupError}=await db.from('events').select('id,division_id,event_code,status,version').in('division_id',scope).eq('id',id).maybeSingle();
    if(lookupError||!event||event.status!=='active')throw Error('Event is not active. Refresh before cancelling.');
-   const {data:pending,error:pendingError}=await db.from('event_requests').select('id,edit_version,request_code')
+   const {data:pending,error:pendingError}=await db.from('event_requests').select('id,edit_version,request_code').in('division_id',scope)
     .eq('event_id',id).eq('request_type','cancel').in('status',['pending','needs_correction'])
     .order('submitted_at',{ascending:false}).limit(1);
    if(pendingError)throw Error(pendingError.message);
    let request=pending?.[0];
    if(!request){
     const created=await db.from('event_requests').insert({
-     request_code:code(),event_id:id,request_type:'cancel',base_event_version:event.version,
+     division_id:event.division_id,request_code:code(event.division_id),event_id:id,request_type:'cancel',base_event_version:event.version,
      proposed_fields:{reason},requester_name:staff.display_name||a.email,requester_email:a.email,
      requester_message:reason
     }).select('id,edit_version,request_code').single();
@@ -433,14 +450,16 @@ Deno.serve(async req=>{
    if(decision==='needs_correction'&&!clean(b.note))throw Error('Explain what needs correction before returning the submission');
    const version=Number(b.expected_version);
    if(!Number.isInteger(version)||version<0)throw Error('Reload this submission before recording a publication decision');
+   const {data:parent,error:parentError}=await db.from('event_requests').select('id,division_id').in('division_id',scope).eq('id',b.id).maybeSingle();
+   if(parentError||!parent)throw Error('Submission not found');
    const {data,error}=await db.rpc('review_request_checked',{p_id:b.id,p_staff:staff.id,p_decision:decision,p_note:clean(b.note,2000),p_version:version});
    if(error)throw Error(error.message);
    if(decision==='approved'&&data?.event_id){
-    const {data:request}=await db.from('event_requests').select('proposed_fields,inspector_edits').eq('id',b.id).maybeSingle();
+    const {data:request}=await db.from('event_requests').select('proposed_fields,inspector_edits').in('division_id',scope).eq('id',b.id).maybeSingle();
     const fields=request?.inspector_edits||request?.proposed_fields||{};
     if(Object.hasOwn(fields,'virtual_meeting_url')||fields.event_mode==='in_person'){
      const link=fields.event_mode==='in_person'?null:clean(fields.virtual_meeting_url,1000)||null;
-     const {error:linkError}=await db.from('events').update({virtual_meeting_url:link}).eq('id',data.event_id);
+     const {error:linkError}=await db.from('events').update({virtual_meeting_url:link}).in('division_id',scope).eq('id',data.event_id);
      if(linkError)return json({ok:true,result:data,notice:'Approved, but saving the online meeting link needs attention: '+linkError.message},200,origin);
     }
    }
@@ -450,16 +469,16 @@ Deno.serve(async req=>{
    requiredStaff(a);
    const pg=Math.max(0,Math.min(1000,Number(u.searchParams.get('page')||0)||0));
    const filter=clean(u.searchParams.get('activity'),50);
-   let q=db.from('event_history').select('id,request_id,event_id,action,actor_email,occurred_at,before_data,after_data,notes',{count:'exact'}).order('occurred_at',{ascending:false});
+   let q=db.from('regional_event_history').select('id,request_id,event_id,action,actor_email,occurred_at,before_data,after_data,notes',{count:'exact'}).in('division_id',scope).order('occurred_at',{ascending:false});
    if(u.searchParams.get('request_id'))q=q.eq('request_id',u.searchParams.get('request_id'));
    if(filter)q=q.eq('action',filter);
    const {data,count,error}=await q.range(pg*50,pg*50+49);
    if(error)throw Error(error.message);
    const rid=[...new Set((data||[]).map((x:any)=>x.request_id).filter(Boolean))];
-   const requests=rid.length?await db.from('event_requests').select('id,request_code,request_type,proposed_fields,approved_event_id,event_id').in('id',rid):{data:[],error:null};
+   const requests=rid.length?await db.from('event_requests').select('id,request_code,request_type,proposed_fields,approved_event_id,event_id').in('division_id',scope).in('id',rid):{data:[],error:null};
    if(requests.error)throw Error(requests.error.message);
    const eventIds=[...new Set([...(data||[]).map((x:any)=>x.event_id).filter(Boolean),...(requests.data||[]).map((x:any)=>x.approved_event_id||x.event_id).filter(Boolean)])];
-   const events=eventIds.length?await db.from('events').select('id,event_code,title,status').in('id',eventIds):{data:[],error:null};
+   const events=eventIds.length?await db.from('events').select('id,event_code,title,status').in('division_id',scope).in('id',eventIds):{data:[],error:null};
    if(events.error)throw Error(events.error.message);
    const rm=new Map((requests.data||[]).map((x:any)=>[x.id,x]));
    const em=new Map((events.data||[]).map((x:any)=>[x.id,x]));
@@ -471,10 +490,42 @@ Deno.serve(async req=>{
    });
    return json({items,total:count||0,page:pg},200,origin);
   }
+  if(action==='division-directory'){
+   const admin=requiredAdmin(a);
+   if(admin.regional_role!=='system_admin'||admin.division_id!==null)throw Error('System administrator access required');
+   if(req.method!=='GET')return err('GET required',405,origin);
+   const [divisions,districts,lodges]=await Promise.all([
+    db.from('divisions').select('id,name,display_order,onboarded').order('display_order'),
+    db.from('districts').select('district_code,district_name,division_id,active').order('district_code'),
+    db.from('lodges').select('id,division_id').eq('active',true)
+   ]);
+   for(const result of [divisions,districts,lodges])if(result.error)throw Error(result.error.message);
+   const counts=new Map();
+   for(const l of lodges.data||[])counts.set(l.division_id,(counts.get(l.division_id)||0)+1);
+   return json({divisions:(divisions.data||[]).map(d=>({...d,lodge_count:counts.get(d.id)||0})),districts:districts.data||[]},200,origin);
+  }
+  if(action==='division-directory-save'){
+   const admin=requiredAdmin(a);
+   if(admin.regional_role!=='system_admin'||admin.division_id!==null)throw Error('System administrator access required');
+   if(req.method!=='POST')return err('POST required',405,origin);
+   const b=await req.json();
+   if(!['division_created','division_updated','district_created','district_updated'].includes(b.operation)||!Number.isInteger(b.division_id)||b.division_id<1||b.division_id>32767||!b.fields||typeof b.fields!=='object'||Array.isArray(b.fields))throw Error('Invalid directory entry');
+   const {data,error}=await db.rpc('regional_directory_save',{p_actor:admin.id,p_action:b.operation,p_division:b.division_id,p_fields:b.fields});
+   if(error)throw Error(error.message);
+   return json({ok:true,item:data,message:'Directory entry saved.'},200,origin);
+  }
   if(action==='staff'){
    requiredAdmin(a);
-   const {data,error}=await db.from('staff_accounts').select('id,email,display_name,phone,role,enabled,created_at,removed_at,removed_by,first_name,middle_name,last_name,office_title,home_phone,mobile_phone,home_address,home_address2,city,state,zip,district,member_number').order('display_name');
-   if(error)throw Error(error.message);return json({items:data},200,origin);
+   const [accounts,assignments,divisions,districts]=await Promise.all([
+    db.from('staff_accounts').select('id,email,display_name,phone,role,regional_role,enabled,created_at,updated_at,removed_at,removed_by,first_name,middle_name,last_name,home_phone,mobile_phone,home_address,home_address2,city,state,zip,district,member_number').order('display_name'),
+    db.from('staff_division_assignments').select('staff_id,division_id,role,district').order('division_id'),
+    db.from('divisions').select('id,name,onboarded').order('display_order'),
+    db.from('districts').select('district_code,district_name,division_id').eq('active',true).order('district_code')
+   ]);
+   for(const r of [accounts,assignments,divisions,districts])if(r.error)throw Error(r.error.message);
+   const byStaff=new Map();
+   for(const row of assignments.data||[]){const list=byStaff.get(row.staff_id)||[];list.push({division_id:row.division_id,role:row.role,district:row.district});byStaff.set(row.staff_id,list)}
+   return json({items:(accounts.data||[]).map(x=>({...x,assignments:byStaff.get(x.id)||[]})),divisions:divisions.data||[],districts:districts.data||[]},200,origin);
   }
   if(action==='staff-toggle'){
    if(req.method!=='POST')return err('POST required',405,origin);
@@ -520,47 +571,26 @@ Deno.serve(async req=>{
    return json({ok:true,message:'Inspector record restored as disabled. Activate separately to grant access.'},200,origin);
   }
   if(action==='staff-save'){
-   requiredAdmin(a);
-   const b=await req.json(),email=clean(b.email,250).toLowerCase();
-   if(!goodEmail(email))throw Error('Valid email required');
+   const admin=requiredAdmin(a);
    if(req.method!=='POST')return err('POST required',405,origin);
-   const role=b.role==='admin'?'admin':'inspector';
+   const b=await req.json(),email=clean(b.email,250).toLowerCase();
+   if(!goodEmail(email)||typeof b.enabled!=='boolean'||!Array.isArray(b.assignments))throw Error('Valid email, access status and division assignments required');
    const first_name=clean(b.first_name,80),middle_name=clean(b.middle_name,80),last_name=clean(b.last_name,80);
-   // A display-only admin form option; no fake district is saved to the database.
-   const districtSelection=clean(b.district,12);
-   if(districtSelection==='at_large'&&role!=='inspector')
-    throw Error('Inspector at Large is only valid for inspector accounts');
-   const district=districtSelection==='at_large'?'':districtSelection;
-   const member_number=clean(b.member_number,30);
-   const home_phone=clean(b.home_phone,50),mobile_phone=clean(b.mobile_phone,50);
+   const member_number=clean(b.member_number,30),home_phone=clean(b.home_phone,50),mobile_phone=clean(b.mobile_phone,50);
    const home_address=clean(b.home_address,220),home_address2=clean(b.home_address2,220);
    const city=clean(b.city,120),stateValue=clean(b.state,2).toUpperCase(),zip=clean(b.zip,12);
-   const office_title=clean(b.office_title,80)||'Inspector';
    const display_name=clean(b.display_name,150)||[first_name,middle_name,last_name].filter(Boolean).join(' ');
-   const {data:existing,error:lookupError}=await db.from('staff_accounts')
-     .select('id,role,removed_at').eq('email',email).maybeSingle();
-   if(lookupError)throw Error(lookupError.message);
-   if(existing?.removed_at)throw Error('This inspector was removed. Use Restore Access instead.');
-   if(existing?.role==='admin' && role!=='admin')throw Error('Existing administrators cannot be demoted here');
-   if(role==='inspector'&&!existing){
-     for(const [label,value] of [['first name',first_name],['last name',last_name],['district',districtSelection],['member ID',member_number],['mobile phone',mobile_phone],['street address',home_address],['city',city],['state',stateValue],['ZIP',zip]]){
-       if(!value)throw Error('Please provide inspector '+label);
-     }
+   if(!b.expected_updated_at&&b.assignments.some((x:any)=>x?.role==='inspector')){
+    for(const [label,value] of [['first name',first_name],['last name',last_name],['member ID',member_number],['mobile phone',mobile_phone],['street address',home_address],['city',city],['state',stateValue],['ZIP',zip]])if(!value)throw Error('Please provide inspector '+label);
    }
-   if(district && !['402','404','410','414','418','422','428','438'].includes(district))throw Error('Choose a valid Division IV district');
    if(stateValue && !/^[A-Z]{2}$/.test(stateValue))throw Error('Enter a valid two-letter state');
    if(zip && !/^\d{5}(?:-\d{4})?$/.test(zip))throw Error('Enter a valid ZIP code');
    if(member_number && !/^\d{1,20}$/.test(member_number))throw Error('Member ID must contain digits');
-   const record={
-    email,display_name,role,enabled:Boolean(b.enabled),phone:clean(b.phone,50)||mobile_phone,
-    first_name,middle_name,last_name,office_title,
-    district:district||null,member_number:member_number||null,
-    home_phone,mobile_phone,home_address,home_address2,city,state:stateValue,zip
-   };
-   if(email===a.email && (!record.enabled||role!=='admin'))throw Error('You cannot disable your own administrator account');
-   const {error}=await db.from('staff_accounts').upsert(record,{onConflict:'email'});
+   if(b.assignments.some((x:any)=>!x||!Number.isInteger(x.division_id)||!['inspector','division_admin'].includes(x.role)||(x.district!==null&&typeof x.district!=='string')))throw Error('Invalid division assignments');
+   const profile={email,display_name,enabled:b.enabled,phone:clean(b.phone,50)||mobile_phone,first_name,middle_name,last_name,member_number,home_phone,mobile_phone,home_address,home_address2,city,state:stateValue,zip};
+   const {error}=await db.rpc('regional_staff_save',{p_actor:admin.id,p_profile:profile,p_assignments:b.assignments,p_expected_updated_at:b.expected_updated_at||null});
    if(error)throw Error(error.message);
-   return json({ok:true},200,origin);
+   return json({ok:true,message:'Staff record and division assignments saved.'},200,origin);
   }
   if(action==='settings'){
    requiredAdmin(a);
@@ -571,11 +601,11 @@ Deno.serve(async req=>{
    requiredAdmin(a);const b=await req.json();
    const allowedSettings=['public_submissions_enabled','public_email_links'];
    if(!allowedSettings.includes(b.key))throw Error('Setting cannot be edited here');
-   if(b.key==='public_submissions_enabled'&&b.value===true&&(!Deno.env.get('TURNSTILE_SECRET')||!Deno.env.get('TURNSTILE_SITE_KEY')))throw Error('Public submissions require both Turnstile keys before launch.');
+   if(b.key==='public_submissions_enabled'&&b.value===true)throw Error('Public submissions are disabled in NorCal Dev.');
    const val=b.key==='public_email_links'?clean(b.value,8000):Boolean(b.value);
    const {error}=await db.from('system_settings').upsert({setting_key:b.key,setting_value:val,updated_at:new Date().toISOString(),updated_by:a.staff.id});
    if(error)throw Error(error.message);return json({ok:true},200,origin);
   }
   return err('Unknown action',404,origin);
- }catch(e){console.error('request failed',e);const message=e instanceof Error?e.message:'Unexpected server error';return err(message,/inspector login|account disabled|administrator access|authenticator|mfa|required sign.in/i.test(message)?403:400,origin)}
+ }catch(e){console.error('request failed',e);const message=e instanceof Error?e.message:'Unexpected server error';return err(message,/inspector login|account disabled|administrator access|staff access|authenticator|mfa|required sign.in/i.test(message)?403:400,origin)}
 });

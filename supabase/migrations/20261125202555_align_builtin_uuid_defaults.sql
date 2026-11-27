@@ -1,0 +1,19 @@
+-- Match the original built-in UUID default explicitly; avoid extension search-path ambiguity.
+ALTER TABLE public.bulk_event_imports ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.calendar_jobs ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.division_correction_history ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.division_correction_requests ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.email_deliveries ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.event_attachments ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.event_history ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.event_requests ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.events ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.inspector_admin_history ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.inspector_documents ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.inspector_resource_categories ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.lodge_change_history ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.lodges ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.newsletter_runs ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.newsletter_subscribers ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.staff_accounts ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();
+ALTER TABLE public.submission_verifications ALTER COLUMN id SET DEFAULT pg_catalog.gen_random_uuid();

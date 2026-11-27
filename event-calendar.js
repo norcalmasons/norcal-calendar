@@ -8,8 +8,8 @@
   if(!Number.isFinite(date.getTime()))throw Error('Invalid published event date');
   return date.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}Z$/,'Z');
  };
- const eventUrl=e=>e.stated_meeting===true?'https://divisionivmasons.org/lodges/':
-  'https://divisionivmasons.org/calendar/?event='+encodeURIComponent(e.id)+'#events-list';
+ const eventUrl=e=>e.stated_meeting===true?'https://dev.norcalmasons.org/lodges/':
+  'https://dev.norcalmasons.org/calendar/?event='+encodeURIComponent(e.id)+'#events-list';
  const venue=e=>{
   if(e.event_mode==='online')return 'Online event';
   if(e.location_tbd)return 'Location TBD';
@@ -55,7 +55,7 @@
    'PRODID:-//Division IV Masons//Public Events//EN',
    'CALSCALE:GREGORIAN','METHOD:PUBLISH',
    'BEGIN:VEVENT',
-   'UID:'+txt(e.id)+'@divisionivmasons.org',
+   'UID:'+txt(e.id)+'@dev.norcalmasons.org',
    'DTSTAMP:'+utc(new Date()),
    'DTSTART:'+utc(e.starts_at),
    'DTEND:'+utc(e.ends_at),
