@@ -103,6 +103,35 @@ Deno.serve(async req=>{
    return reply({settings:await getSettings()},200,origin);
   }
   const admin=await requireAdmin(req);
+  if(action==='division-list'||action==='division-save'||action==='division-history'){
+   const {data:ids,error:scopeError}=await db.rpc('regional_settings_scope',{p_staff:admin.id});
+   if(scopeError||!Array.isArray(ids)||!ids.length)throw Error('Administrator access required');
+   const systemAdmin=admin.role==='admin'&&admin.regional_role==='system_admin'&&admin.division_id===null;
+   if(action==='division-list'){
+    if(req.method!=='GET')return fail('GET required',405,origin);
+    const [divisions,settings]=await Promise.all([
+     db.from('divisions').select('id,name,onboarded').in('id',ids).order('display_order'),
+     db.from('division_settings').select('*').in('division_id',ids)
+    ]);
+    if(divisions.error||settings.error)throw Error('Unable to load division settings');
+    return reply({divisions:divisions.data,settings:settings.data,can_configure_calendar:systemAdmin,development_only:true},200,origin);
+   }
+   if(action==='division-history'){
+    if(req.method!=='GET')return fail('GET required',405,origin);
+    const id=Number(new URL(req.url).searchParams.get('division_id'));
+    if(!Number.isInteger(id)||!ids.includes(id))throw Error('Administrator access required for this division');
+    const {data,error}=await db.from('division_settings_history').select('id,occurred_at,actor_staff_id,before_data,after_data').eq('division_id',id).order('occurred_at',{ascending:false}).limit(25);
+    if(error)throw Error('Unable to load division settings history');
+    return reply({items:data||[]},200,origin);
+   }
+   if(req.method!=='POST')return fail('POST required',405,origin);
+   const body=await req.json();
+   if(!Number.isInteger(body?.division_id)||!ids.includes(body.division_id)||!Number.isInteger(body?.expected_version)||!body?.fields||typeof body.fields!=='object'||Array.isArray(body.fields))throw Error('Invalid division settings request');
+   const {data,error}=await db.rpc('regional_save_division_settings',{p_actor:admin.id,p_division:body.division_id,p_expected_version:body.expected_version,p_fields:body.fields});
+   if(error)throw Error(error.message);
+   return reply({ok:true,settings:data,development_only:true},200,origin);
+  }
+
   if(action==='admin'){
    if(req.method!=='GET')return fail('GET required',405,origin);
    return reply({settings:await getSettings()},200,origin);

@@ -1022,8 +1022,8 @@ async function activateInspectorTab(key){
  if($('admin-view').classList.contains('mfa-locked')){
   toast('Complete authenticator verification to access the Inspector Desk.',true);return;
  }
- if(key==='divisions'&&state.staff?.regional_role!=='system_admin'){toast('System administrator access is required.',true);return;}
- if((key==='staff'||key==='settings'||key==='lodges'||key==='corrections'||key==='newsletter')&&state.staff?.role!=='admin'){
+ if(['divisions','settings','staff','newsletter'].includes(key)&&state.staff?.regional_role!=='system_admin'){toast('System administrator access is required.',true);return;}
+ if((key==='staff'||key==='settings'||key==='regional-settings'||key==='lodges'||key==='corrections'||key==='newsletter')&&state.staff?.role!=='admin'){
   toast('Administrator access is required to manage newsletters, lodges, inspectors, or settings.',true);
   return;
  }
@@ -1032,7 +1032,7 @@ async function activateInspectorTab(key){
   menu.classList.toggle('active',!!menu.querySelector('.tab.active'));
   menu.open=false;
  });
- for(const k of ['dashboard','import','lodges','corrections','requests','events','resources','history','staff','divisions','newsletter','settings'])
+ for(const k of ['dashboard','import','lodges','corrections','requests','events','resources','history','staff','divisions','newsletter','regional-settings','settings'])
   $('tab-'+k).classList.toggle('hidden',k!==key);
  if(key==='dashboard'){await Promise.allSettled([loadDashboard(),window.loadCalendarSync?.(),window.loadWebsitePreview?.()]);}
  if(key==='lodges')await window.loadLodges?.();
@@ -1045,6 +1045,7 @@ async function activateInspectorTab(key){
  if(key==='staff')await loadStaff();
  if(key==='divisions')await loadDivisionDirectory().catch(ex=>toast(ex.message,true));
  if(key==='newsletter')await window.loadNewsletter?.();
+ if(key==='regional-settings')await window.loadRegionalSettings?.();
  if(key==='settings')await Promise.allSettled([loadSettings(),window.loadWebsiteSettings?.(),window.loadNewsletter?.()]);
 }
 all('.tab').forEach(t=>t.onclick=()=>activateInspectorTab(t.dataset.tab));
