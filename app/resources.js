@@ -15,6 +15,7 @@ const editorNotice=(msg,bad=false)=>{
 async function request(action,payload,params={}){
  const url=new URL(endpoint);url.searchParams.set('action',action);
  for(const [k,v] of Object.entries(params))url.searchParams.set(k,v);
+ if(['list','download','history'].includes(action)&&window.deskSelectedDivision!=null)url.searchParams.set('division_id',String(window.deskSelectedDivision));
  const s=(await db.auth.getSession()).data.session;
  if(!s?.access_token)throw Error('Inspector sign-in required');
  const headers={apikey:KEY,authorization:'Bearer '+s.access_token};
@@ -124,7 +125,7 @@ function editor(doc){
  const divisionPicker=byId('resources-document-division');
  divisionPicker.replaceChildren(new Option('Choose division',''));
  for(const d of divisions.filter(x=>adminDivisions.includes(x.id)))divisionPicker.add(new Option(d.name,String(d.id)));
- divisionPicker.value=doc?String(doc.division_id):adminDivisions.length===1?String(adminDivisions[0]):byId('resources-division-filter').value;
+ divisionPicker.value=doc?String(doc.division_id):adminDivisions.length===1?String(adminDivisions[0]):String(window.deskSelectedDivision??'');
  if(!divisionPicker.value)divisionPicker.value='';
  divisionPicker.disabled=!!doc;
  byId('resources-editor').classList.remove('hidden');
@@ -143,6 +144,8 @@ function editor(doc){
  byId('resources-editor').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 function closeEditor(){selected=null;byId('resources-editor').classList.add('hidden');byId('resources-file').value=''}
+window.closeRegionalResourceEditor=()=>{closeEditor();byId('resources-categories-panel').classList.add('hidden');};
+window.regionalResourceBusy=()=>busyNow||categoryBusy;
 async function download(d){
  try{
   alertText('Preparing secure download…');
@@ -157,7 +160,9 @@ async function download(d){
 }
 async function history(d){
  try{
+  const scopeGeneration=window.deskScopeGeneration;
   const response=await request('history',undefined,{id:d.id});
+  if(scopeGeneration!==window.deskScopeGeneration)return;
   const panel=byId('resources-version-history');panel.replaceChildren();
   panel.append(make('h4','',d.title+' — change history'));
   for(const h of response.items||[]){
@@ -172,7 +177,7 @@ async function history(d){
 function visible(){
  const q=byId('resources-search').value.toLowerCase().trim();
  const category=byId('resources-category-filter').value;
- const division=byId('resources-division-filter').value;
+ const division=window.deskSelectedDivision==null?'':String(window.deskSelectedDivision);
  return docs.filter(d=>(!division||String(d.division_id)===division)&&(category==='All categories'||d.category===category)&&
   (!q||[d.title,d.original_name,d.description,d.category].some(v=>String(v||'').toLowerCase().includes(q))));
 }
@@ -214,17 +219,16 @@ function render(){
 async function load(){
  const root=byId('resources-list');if(!root)return;
  if(!['admin','inspector'].includes(state.staff?.role)){alertText('Active inspector sign-in required',true);return}
+ const scopeGeneration=window.deskScopeGeneration;
  root.textContent='Loading documents…';
  try{
   const response=await request('list');
+  if(scopeGeneration!==window.deskScopeGeneration)return;
   docs=Array.isArray(response.items)?response.items:[];
   categories=Array.isArray(response.categories)?response.categories:[];
   divisions=response.divisions||[];adminDivisions=response.admin_divisions||[];
-  manage=!!response.can_manage;manageCategories=!!response.can_manage_categories;
-  const filter=byId('resources-division-filter'),previous=filter.value;
-  filter.replaceChildren(new Option('All assigned divisions',''));
-  for(const d of divisions)filter.add(new Option(d.name,String(d.id)));
-  filter.value=divisions.some(d=>String(d.id)===previous)?previous:'';
+  manage=!!response.can_manage;manageCategories=!!response.can_manage_categories&&(window.deskSelectedDivision==null||divisions.length===1);
+  
   byId('resources-manage-categories').classList.toggle('hidden',!manageCategories);
   if(!manageCategories)byId('resources-categories-panel').classList.add('hidden');
   byId('resources-admin-actions').classList.toggle('hidden',!manage);
@@ -305,7 +309,7 @@ async function removeDocument(doc){
 if(!byId('resources-list'))return;
 byId('resources-search').addEventListener('input',render);
 byId('resources-category-filter').addEventListener('change',render);
-byId('resources-division-filter').addEventListener('change',render);
+
 byId('resources-refresh').onclick=load;
 for(const id of ['resources-document-title','resources-document-category','resources-document-description','resources-file'])
  byId(id).addEventListener('input',()=>editorNotice());

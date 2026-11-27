@@ -217,10 +217,12 @@
  };
  async function loadCalendarSync(){
   if(!sync||!issues)return;
+  const scopeGeneration=window.deskScopeGeneration;
   sync.textContent='Loading Google Calendar delivery records…';
   issues.replaceChildren();
   try{
    const data=await api('calendar-sync-overview'),counts=data.counts||{};
+   if(scopeGeneration!==window.deskScopeGeneration)return;
    sync.replaceChildren();
    for(const [key,label] of [['synced','Synchronized'],['queued','In queue / retrying'],
     ['failed','Delivery failed'],['unverified','Not verified']]){
@@ -239,7 +241,7 @@
     row.type='button';
     const status=x.state==='failed'?'Failed':x.state==='queued'?'Queued / processing':'Not verified';
     row.append(make('strong',x.title||x.code||'Calendar event'),
-     make('small',status+' · '+(x.code||''),'muted'));
+     make('small',[deskDivisionName(x.division_id),status,x.code].filter(Boolean).join(' · '),'muted'));
     if(x.error)row.append(make('span',x.error,'dashboard-error-text'));
     row.onclick=async()=>{await activateInspectorTab('events');await eventDetail(x.id);};
     issues.append(row);

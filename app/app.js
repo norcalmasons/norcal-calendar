@@ -101,6 +101,7 @@ function deskDivisionName(id){return deskDivisions.find(d=>d.id===Number(id))?.n
 function deskScopeLabel(){return deskDivision===null?'All assigned divisions':deskDivisionName(deskDivision);}
 function deskResetScope(){
  deskDivisions=[];deskDivision=null;deskScopeReady=false;deskScopePromise=null;deskScopeVersion++;
+ window.deskSelectedDivision=null;window.deskScopeGeneration=deskScopeVersion;
  const picker=$('desk-division');if(picker){picker.replaceChildren(new Option('Loading divisions…',''));picker.disabled=true;}
 }
 async function ensureDeskScope(){
@@ -128,11 +129,13 @@ function refreshDeskScopeUI(){
  picker.disabled=!deskScopeReady||deskDivisions.length<=1||!applicable;
  $('desk-division-caption').textContent=!applicable?'This section has its own scope.':deskScopeLabel();
  window.deskSelectedDivision=deskDivision;
+ window.deskScopeGeneration=deskScopeVersion;
 }
 $('desk-division').onchange=async e=>{
  const next=e.target.value===''?null:Number(e.target.value);
  if(!deskScopeReady||(next!==null&&!deskDivisions.some(d=>d.id===next)))return;
  const hasEditor=!!document.querySelector('#inspector-editor-host form, #event-editor-host form, #resources-editor:not(.hidden)');
+ if(window.regionalResourceBusy?.()){e.target.value=deskDivision===null?'':String(deskDivision);toast('Finish the document operation before switching divisions.',true);return;}
  if(hasEditor&&!await divisionQuestion('Discard open edits and switch divisions?',{title:'Switch division',confirmLabel:'Discard and switch'})){
   e.target.value=deskDivision===null?'':String(deskDivision);return;
  }
@@ -1093,7 +1096,7 @@ async function activateInspectorTab(key){
   menu.open=false;
  });
  for(const k of ['dashboard','import','lodges','corrections','requests','events','resources','history','staff','divisions','newsletter','regional-settings','settings'])
-  $('tab-'+k).classList.toggle('hidden',k!==key);
+  $('tab-'+k)?.classList.toggle('hidden',k!==key);
  if(key==='dashboard'){await Promise.allSettled([loadDashboard(),window.loadCalendarSync?.(),window.loadWebsitePreview?.()]);}
  if(key==='lodges')await window.loadLodges?.();
  if(key==='corrections')await window.loadCorrections?.();
