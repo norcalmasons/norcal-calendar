@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NorCal Event Submissions | Grand Lodge of California</title><meta name="description" content="Submit, change, or cancel a Division IV Masonic event. An inspector verifies submissions for accurate, coordinated publication on the Division calendar. Lodges independently schedule their activities.">
-<meta name="apple-mobile-web-app-title" content="NorCal Masons"><link rel="manifest" href="/manifest.webmanifest?v=20261125a"><meta name="theme-color" content="#142d46"><link rel="icon" type="image/x-icon" href="/assets/favicon.ico?v=20261125a"><link rel="icon" type="image/png" sizes="256x256" href="/assets/favicon.png?v=20261125a"><link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png?v=20261125a"><link rel="stylesheet" href="/app/styles.css?v=33"><link rel="stylesheet" href="/shared/header.css?v=2"><script defer src="/shared/header.js?v=5"></script><script defer src="/script.js?v=5"></script><script defer src="/app/bootstrap.js"></script><script defer src="/app/app.js?v=20261126-regionalsettings1"></script>
+<meta name="apple-mobile-web-app-title" content="NorCal Masons"><link rel="manifest" href="/manifest.webmanifest?v=20261125a"><meta name="theme-color" content="#142d46"><link rel="icon" type="image/x-icon" href="/assets/favicon.ico?v=20261125a"><link rel="icon" type="image/png" sizes="256x256" href="/assets/favicon.png?v=20261125a"><link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png?v=20261125a"><link rel="stylesheet" href="/app/styles.css?v=33"><link rel="stylesheet" href="/shared/header.css?v=2"><script defer src="/shared/header.js?v=5"></script><script defer src="/script.js?v=5"></script><script defer src="/app/bootstrap.js"></script><script defer src="/app/app.js?v=20261126-desk-scope1"></script>
 <script defer src="/app/lodges-admin.js?v=20261126-venue1"></script><script defer src="/app/corrections-admin.js?v=2"></script><script defer src="/app/site-settings-admin.js?v=6"></script><script defer src="/app/regional-settings.js?v=1"></script><script defer src="/app/resources.js?v=20261126-regional1"></script><script defer src="/app/newsletter-admin.js?v=5"></script>
 <script defer src="/app/mfa.js?v=9"></script>
 
@@ -159,6 +159,7 @@
 </section>
 <section id="admin-view" class="hidden">
 <div class="admin-head"><div><div class="eyebrow">Inspector Desk</div><h2 id="welcome">Review Submissions</h2></div><div class="admin-status"><span class="chip" id="staff-role">User</span></div></div>
+<div class="form-grid desk-scope-bar"><label>Working division <select id="desk-division" disabled><option value="">Loading divisions…</option></select></label><p class="help" id="desk-division-caption" aria-live="polite">Select the division for event management.</p></div>
 <div class="tabs">
 <button class="tab active" data-tab="dashboard" type="button">Dashboard</button>
 <button class="tab" data-tab="requests" type="button">Review Submissions</button>
@@ -167,9 +168,9 @@
 <button class="tab" data-tab="history" type="button">Status Log</button>
 <button class="tab admin-only hidden" data-tab="corrections" type="button">Corrections</button>
 <button class="tab admin-only hidden" data-tab="lodges" type="button">Lodges</button>
-<button class="tab admin-only hidden" data-tab="staff" type="button">Inspectors</button>
+<button class="tab system-admin-only hidden" data-tab="staff" type="button">Inspectors</button>
 <button class="tab system-admin-only hidden" data-tab="divisions" type="button">Divisions &amp; Districts</button>
-<button class="tab admin-only hidden" data-tab="newsletter" type="button">Newsletter</button>
+<button class="tab system-admin-only hidden" data-tab="newsletter" type="button">Newsletter</button>
 <button class="tab admin-only hidden" data-tab="regional-settings" type="button">Division Settings</button><button class="tab system-admin-only hidden" data-tab="settings" type="button">System Settings</button>
 </div>
 <section id="tab-dashboard" class="panel">

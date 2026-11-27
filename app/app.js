@@ -94,6 +94,53 @@ function canonicalHost(value){
 }
 const state={view:'public',mode:null,staff:null,user:null,config:null,event:null,original:null,page:0,historyPage:0,total:0,loginPurpose:'inspector',pendingOtp:null};
 let toastTimer,turnstileToken='';
+const deskScopedActions=new Set(['requests','detail','dashboard','calendar-sync-overview','events','event-detail','audit','inspector-edit','inspector-publish-edit','calendar-retry','event-undo','inspector-cancel-event','review']);
+const deskScopedTabs=new Set(['dashboard','requests','events','history','resources']);
+let deskDivisions=[],deskDivision=null,deskScopeReady=false,deskScopeVersion=0,deskIdentity='',deskScopePromise=null,deskTab='dashboard';
+function deskDivisionName(id){return deskDivisions.find(d=>d.id===Number(id))?.name||divisionName(id)||(id?'Division '+id:'');}
+function deskScopeLabel(){return deskDivision===null?'All assigned divisions':deskDivisionName(deskDivision);}
+function deskResetScope(){
+ deskDivisions=[];deskDivision=null;deskScopeReady=false;deskScopePromise=null;deskScopeVersion++;
+ const picker=$('desk-division');if(picker){picker.replaceChildren(new Option('Loading divisions…',''));picker.disabled=true;}
+}
+async function ensureDeskScope(){
+ if(deskScopeReady)return;
+ if(deskScopePromise)return deskScopePromise;
+ const version=deskScopeVersion;
+ const promise=(async()=>{
+  const result=await api('event-scope');
+  if(version!==deskScopeVersion)throw Error('Staff session changed. Reopen the Inspector Desk.');
+  deskDivisions=result.divisions||[];
+  if(!deskDivisions.length)throw Error('No assigned divisions are available.');
+  const picker=$('desk-division');picker.replaceChildren();
+  if(deskDivisions.length>1)picker.add(new Option('All assigned divisions',''));
+  for(const d of deskDivisions)picker.add(new Option(d.name,String(d.id)));
+  deskDivision=deskDivisions.length===1?deskDivisions[0].id:null;
+  picker.value=deskDivision===null?'':String(deskDivision);
+  deskScopeReady=true;refreshDeskScopeUI();
+ })();
+ deskScopePromise=promise;
+ try{await promise;}finally{if(deskScopePromise===promise)deskScopePromise=null;}
+}
+function refreshDeskScopeUI(){
+ const picker=$('desk-division');
+ const applicable=deskScopedTabs.has(deskTab);
+ picker.disabled=!deskScopeReady||deskDivisions.length<=1||!applicable;
+ $('desk-division-caption').textContent=!applicable?'This section has its own scope.':deskScopeLabel();
+ window.deskSelectedDivision=deskDivision;
+}
+$('desk-division').onchange=async e=>{
+ const next=e.target.value===''?null:Number(e.target.value);
+ if(!deskScopeReady||(next!==null&&!deskDivisions.some(d=>d.id===next)))return;
+ const hasEditor=!!document.querySelector('#inspector-editor-host form, #event-editor-host form, #resources-editor:not(.hidden)');
+ if(hasEditor&&!await divisionQuestion('Discard open edits and switch divisions?',{title:'Switch division',confirmLabel:'Discard and switch'})){
+  e.target.value=deskDivision===null?'':String(deskDivision);return;
+ }
+ deskDivision=next;deskScopeVersion++;refreshDeskScopeUI();
+ for(const id of ['request-detail','event-detail','resources-version-history']){const n=$(id);if(n){n.classList.add('hidden');n.replaceChildren();}}
+ window.closeRegionalResourceEditor?.();
+ await activateInspectorTab(deskTab);
+};
 function toast(t,error=false){const x=$('toast');x.textContent=t;x.className='toast'+(error?' error':'');clearTimeout(toastTimer);toastTimer=setTimeout(()=>x.classList.add('hidden'),6500)}
 function notify(t,error=false){const x=$('notice');x.textContent=t;x.className='notice'+(error?' error':'');}
 /** Persistent edit feedback appears immediately below its action controls. */
@@ -115,6 +162,10 @@ function formFeedback(form,text='',kind='success'){
 }
 function busy(b,v){b.disabled=v;if(!b.dataset.label)b.dataset.label=b.textContent;b.textContent=v?'Working…':b.dataset.label}
 async function api(action,payload=null,filters={}){
+ if(deskScopedActions.has(action)){
+  await ensureDeskScope();
+  filters={...filters,division_id:deskDivision};
+ }
  const url=new URL(ROOT+'/functions/v1/division-calendar');
  url.searchParams.set('action',action);
  for(const [k,v] of Object.entries(filters))if(v!==''&&v!=null)url.searchParams.set(k,v);
@@ -303,6 +354,8 @@ bindDivisionRouting($('new-form'),syncNewTitle);
 bindDivisionRouting($('modify-form'),syncEditTitle);
 async function identity(){
  const m=await api('me');state.user=m.email;state.staff=m.staff;
+ const key=m.staff&&m.mfa?.verified?String(m.staff.id||m.email):'';
+ if(key!==deskIdentity){deskIdentity=key;deskResetScope();}
  $('nav-admin').classList.toggle('hidden',!m.staff);
  $('nav-signout').classList.toggle('hidden',!m.email);
  $('nav-signin').classList.toggle('hidden',!!m.email);
@@ -565,10 +618,11 @@ $('modify-form').onsubmit=async e=>{
 };
 let page=0,historyPage=0;
 async function loadRequests(p=0){
- page=Math.max(0,p);const out=$('request-list');out.textContent='Loading calendar submissions…';
+ const scopeVersion=deskScopeVersion;page=Math.max(0,p);const out=$('request-list');out.textContent='Loading calendar submissions…';
  try{
   const filters={page,search:$('filter-search').value,status:$('filter-status').value,from:$('filter-from').value,to:$('filter-to').value,type:$('filter-type').value,lodge:$('filter-lodge').value,event_from:$('filter-event-from').value,event_to:$('filter-event-to').value};
   const data=await api('requests',null,filters);
+  if(scopeVersion!==deskScopeVersion)return;
   $('count').textContent=data.total+' submission'+(data.total===1?'':'s');
   $('page-label').textContent='Page '+(page+1);
   $('prev-page').disabled=page===0;$('next-page').disabled=(page+1)*50>=data.total;
@@ -576,7 +630,7 @@ async function loadRequests(p=0){
   if(!data.items.length){out.textContent='No submissions match your filters.';return}
   for(const item of data.items){
    const b=document.createElement('button');b.className='request-row';
-   b.innerHTML='<span><strong>'+safe(item.event_title||nice(item.request_type))+'</strong><small>'+safe(item.request_code)+' · '+safe(nice(item.request_type))+'</small></span><small class="date">'+safe(fmt(item.submitted_at))+'</small><span class="chip '+safe(item.status)+'">'+safe(nice(item.status))+'</span>';
+   b.innerHTML='<span><strong>'+safe(item.event_title||nice(item.request_type))+'</strong><small>'+safe(deskDivisionName(item.division_id))+' · '+safe(item.request_code)+' · '+safe(nice(item.request_type))+'</small></span><small class="date">'+safe(fmt(item.submitted_at))+'</small><span class="chip '+safe(item.status)+'">'+safe(nice(item.status))+'</span>';
    b.onclick=()=>detail(item.id);out.append(b);
   }
  }catch(e){out.textContent='Unable to load submissions.';toast(e.message,true)}
@@ -761,14 +815,15 @@ async function showCoordinationAdvisory(host,fields,currentEventId){
 }
 
 async function detail(id){
- const target=$('request-detail');target.classList.remove('hidden');target.textContent='Loading…';
+ const scopeVersion=deskScopeVersion;const target=$('request-detail');target.classList.remove('hidden');target.textContent='Loading…';
  try{
   const d=await api('detail',null,{id}),r=d.request,p=r.proposed_fields||{},event=d.event||{};
+  if(scopeVersion!==deskScopeVersion)return;
   const submitted={...eventFormValues(event),...p};
   const effective={...eventFormValues(event),...(r.inspector_edits??p),division_id:r.division_id};
   const address=[effective.location_address1,effective.location_address2,effective.location_city,effective.location_state,effective.location_zip].filter(Boolean).join(', ')||effective.location_address||'—';
-  const pairs=[['Submission ID',r.request_code],['Submission type',nice(r.request_type)],['Submitted',fmt(r.submitted_at)],['Status',nice(r.status)],['Title',effective.title],['Event type',effective.event_type],['Hosting lodge',effective.hosted_by],['District',effective.district?('No. '+effective.district):'—'],['Start',effective.start_local],['End',effective.end_local],['Description',effective.public_description],['Event format',nice(effective.event_mode||'in_person')],['Venue',effective.location_tbd?'Location TBD':effective.location_name],['Address',effective.location_tbd?'Location TBD':address],['Event POC name',effective.poc_name],['Event POC position',effective.poc_position],['Event POC phone',effective.poc_phone],['Event POC email',effective.poc_email],['Cost',effective.cost_details],['Attire',effective.attire],['Attendees',effective.invited_audience],['Registration URL',effective.registration_url],['Payment URL',effective.payment_url],['Flyer / invitation URL',effective.flyer_url],['Cancellation reason',effective.reason],['Contact',r.requester_name],['Email',r.requester_email],['Telephone',r.requester_phone],['Message',r.requester_message]];
-  target.innerHTML='<div class="review-title"><div><h2>'+safe(effective.title||nice(r.request_type))+'</h2><p class="muted">'+safe(r.request_code)+'</p></div><span class="chip '+safe(r.status)+'">'+safe(nice(r.status))+'</span></div><div class="detail-grid">'+pairs.map(([k,v])=>'<div><small>'+safe(k)+'</small>'+safe(v??'—')+'</div>').join('')+'</div><h3>Inspector revisions</h3><p class="help">The submitted details remain unchanged. Saved inspector corrections are recorded separately.</p><div id="request-diff"></div><div id="inspector-editor-host"></div><hr><h3>Review &amp; delivery</h3><label>Message to submitter (optional)<textarea id="review-note" rows="2"></textarea></label><div class="review-actions" id="review-actions"></div><div id="delivery-summary"></div><h3>Submission history</h3><div class="timeline" id="item-history"></div>';
+  const pairs=[['Division',deskDivisionName(r.division_id)],['Submission ID',r.request_code],['Submission type',nice(r.request_type)],['Submitted',fmt(r.submitted_at)],['Status',nice(r.status)],['Title',effective.title],['Event type',effective.event_type],['Hosting lodge',effective.hosted_by],['District',effective.district?('No. '+effective.district):'—'],['Start',effective.start_local],['End',effective.end_local],['Description',effective.public_description],['Event format',nice(effective.event_mode||'in_person')],['Venue',effective.location_tbd?'Location TBD':effective.location_name],['Address',effective.location_tbd?'Location TBD':address],['Event POC name',effective.poc_name],['Event POC position',effective.poc_position],['Event POC phone',effective.poc_phone],['Event POC email',effective.poc_email],['Cost',effective.cost_details],['Attire',effective.attire],['Attendees',effective.invited_audience],['Registration URL',effective.registration_url],['Payment URL',effective.payment_url],['Flyer / invitation URL',effective.flyer_url],['Cancellation reason',effective.reason],['Contact',r.requester_name],['Email',r.requester_email],['Telephone',r.requester_phone],['Message',r.requester_message]];
+  target.innerHTML='<div class="review-title"><div><h2>'+safe(effective.title||nice(r.request_type))+'</h2><p class="muted">'+safe(deskDivisionName(r.division_id))+' · '+safe(r.request_code)+'</p></div><span class="chip '+safe(r.status)+'">'+safe(nice(r.status))+'</span></div><div class="detail-grid">'+pairs.map(([k,v])=>'<div><small>'+safe(k)+'</small>'+safe(v??'—')+'</div>').join('')+'</div><h3>Inspector revisions</h3><p class="help">The submitted details remain unchanged. Saved inspector corrections are recorded separately.</p><div id="request-diff"></div><div id="inspector-editor-host"></div><hr><h3>Review &amp; delivery</h3><label>Message to submitter (optional)<textarea id="review-note" rows="2"></textarea></label><div class="review-actions" id="review-actions"></div><div id="delivery-summary"></div><h3>Submission history</h3><div class="timeline" id="item-history"></div>';
   showDifferences($('request-diff'),submitted,effective);
   const advisory=document.createElement('div');
   advisory.className='coordination-advisory';advisory.setAttribute('role','status');
@@ -844,10 +899,11 @@ function dashboardElement(tag,className,textValue){
  return n;
 }
 async function loadDashboard(){
- const stats=$('dashboard-stats'),requests=$('dashboard-requests'),failures=$('dashboard-failures'),recent=$('dashboard-recent');
+ const scopeVersion=deskScopeVersion;const stats=$('dashboard-stats'),requests=$('dashboard-requests'),failures=$('dashboard-failures'),recent=$('dashboard-recent');
  stats.textContent='Loading dashboard…';requests.replaceChildren();failures.replaceChildren();recent.replaceChildren();
  try{
   const d=await api('dashboard'),counts=d.counts||{};
+  if(scopeVersion!==deskScopeVersion)return;
   stats.replaceChildren();
   const cards=[
     {name:'Awaiting Publication',value:counts.pending||0,kind:'requests',filter:'pending'},
@@ -871,7 +927,7 @@ async function loadDashboard(){
    const btn=dashboardElement('button','dashboard-entry');
    btn.type='button';
    btn.append(dashboardElement('strong','',req.title||'Event submission'),
-     dashboardElement('small','muted',(req.code||'')+' · '+nice(req.status)+' · '+fmt(req.submitted_at)));
+     dashboardElement('small','muted',[deskDivisionName(req.division_id),req.code||'',nice(req.status)].filter(Boolean).join(' · ')+' · '+fmt(req.submitted_at)));
    btn.onclick=async()=>{await activateInspectorTab('requests');await detail(req.id)};
    requests.append(btn);
   }
@@ -879,7 +935,7 @@ async function loadDashboard(){
   for(const item of d.failures||[]){
    const box=dashboardElement('div','dashboard-entry dashboard-error');
    box.append(dashboardElement('strong','',item.title||'Event'),
-     dashboardElement('small','muted',item.code||''),
+     dashboardElement('small','muted',[deskDivisionName(item.division_id),item.code].filter(Boolean).join(' · ')),
      dashboardElement('p','dashboard-error-text',item.error||'Google Calendar did not accept the last update.'));
    const actions=dashboardElement('div','dashboard-entry-actions');
    const open=dashboardElement('button','secondary','Open Event');open.type='button';
@@ -903,7 +959,7 @@ async function loadDashboard(){
    btn.type='button';
    btn.append(dashboardElement('strong','',item.event_title||'Event submission'),
      dashboardElement('span','',auditAction(item)),
-     dashboardElement('small','muted',fmt(item.at)+' · '+(item.actor||'System')));
+     dashboardElement('small','muted',[deskDivisionName(item.division_id),fmt(item.at),item.actor||'System'].filter(Boolean).join(' · ')));
    btn.onclick=async()=>{
     if(item.event_id){await activateInspectorTab('events');await eventDetail(item.event_id)}
     else if(item.request_id){await activateInspectorTab('requests');await detail(item.request_id)}
@@ -916,10 +972,11 @@ async function loadDashboard(){
 $('dashboard-refresh').onclick=()=>Promise.allSettled([loadDashboard(),window.loadCalendarSync?.(),window.loadWebsitePreview?.()]);
 let eventPage=0;
 async function loadEvents(p=0){
- eventPage=Math.max(0,p);
+ const scopeVersion=deskScopeVersion;eventPage=Math.max(0,p);
  const list=$('event-list');list.textContent='Loading events…';$('event-detail').classList.add('hidden');
  try{
   const data=await api('events',null,{page:eventPage,status:$('event-status').value,search:$('event-search').value});
+  if(scopeVersion!==deskScopeVersion)return;
   $('event-count').textContent=data.total+' event'+(data.total===1?'':'s');
   $('event-page').textContent='Page '+(eventPage+1);
   $('event-prev').disabled=eventPage===0;$('event-next').disabled=(eventPage+1)*50>=data.total;
@@ -928,7 +985,7 @@ async function loadEvents(p=0){
   for(const item of data.items){
    const btn=document.createElement('button');btn.type='button';btn.className='request-row';
    const sync=calendarState(item,item.latest_job);
-   btn.innerHTML='<span><strong>'+safe(item.title)+'</strong><small>'+safe(item.event_code)+' · '+safe(item.hosted_by||'')+'</small></span><small class="date">'+safe(fmt(item.starts_at))+'</small><span class="chip '+sync.tone+'">'+safe(sync.label)+'</span>';
+   btn.innerHTML='<span><strong>'+safe(item.title)+'</strong><small>'+safe(deskDivisionName(item.division_id))+' · '+safe(item.event_code)+' · '+safe(item.hosted_by||'')+'</small></span><small class="date">'+safe(fmt(item.starts_at))+'</small><span class="chip '+sync.tone+'">'+safe(sync.label)+'</span>';
    btn.onclick=()=>eventDetail(item.id);list.append(btn);
   }
  }catch(e){list.textContent=e.message;toast(e.message,true)}
@@ -938,11 +995,12 @@ $('event-search').onkeydown=e=>{if(e.key==='Enter')loadEvents(0)};
 $('event-prev').onclick=()=>loadEvents(eventPage-1);
 $('event-next').onclick=()=>loadEvents(eventPage+1);
 async function eventDetail(id){
- const host=$('event-detail');host.classList.remove('hidden');host.textContent='Loading event…';
+ const scopeVersion=deskScopeVersion;const host=$('event-detail');host.classList.remove('hidden');host.textContent='Loading event…';
  try{
   const d=await api('event-detail',null,{id}),ev=d.event,initial=eventFormValues(ev);
+  if(scopeVersion!==deskScopeVersion)return;
   const job=d.calendar?.[0],status=calendarState(ev,job);
-  host.innerHTML='<h2>'+safe(ev.title)+'</h2><p class="muted">'+safe(ev.event_code)+' · '+safe(nice(ev.status))+'</p><p><b>Starts:</b> '+safe(fmt(ev.starts_at))+' · <b>Location:</b> '+safe(ev.location_name||'Location TBD')+'</p><p><b>Event point of contact:</b> '+safe(ev.poc_name||'Not provided')+(ev.poc_position?' ('+safe(ev.poc_position)+')':'')+(ev.poc_phone?' · '+safe(ev.poc_phone):'')+(ev.poc_email?' · '+safe(ev.poc_email):'')+'</p>'+(ev.cost_details?'<p><b>Cost:</b> '+safe(ev.cost_details)+'</p>':'')+'<p><b>Google Calendar:</b> <span class="chip '+status.tone+'">'+safe(status.label)+'</span></p>'+(job?.last_error?'<p class="notice error">Sync issue: '+safe(job.last_error)+'</p>':'')+'<div class="review-actions" id="event-actions"></div><div id="event-editor-host"></div><h3>Recent history</h3><div id="event-history" class="timeline"></div>';
+  host.innerHTML='<h2>'+safe(ev.title)+'</h2><p class="muted">'+safe(deskDivisionName(ev.division_id))+' · '+safe(ev.event_code)+' · '+safe(nice(ev.status))+'</p><p><b>Starts:</b> '+safe(fmt(ev.starts_at))+' · <b>Location:</b> '+safe(ev.location_name||'Location TBD')+'</p><p><b>Event point of contact:</b> '+safe(ev.poc_name||'Not provided')+(ev.poc_position?' ('+safe(ev.poc_position)+')':'')+(ev.poc_phone?' · '+safe(ev.poc_phone):'')+(ev.poc_email?' · '+safe(ev.poc_email):'')+'</p>'+(ev.cost_details?'<p><b>Cost:</b> '+safe(ev.cost_details)+'</p>':'')+'<p><b>Google Calendar:</b> <span class="chip '+status.tone+'">'+safe(status.label)+'</span></p>'+(job?.last_error?'<p class="notice error">Sync issue: '+safe(job.last_error)+'</p>':'')+'<div class="review-actions" id="event-actions"></div><div id="event-editor-host"></div><h3>Recent history</h3><div id="event-history" class="timeline"></div>';
   const actions=$('event-actions');
   if(ev.status==='active'){
    const edit=document.createElement('button');edit.className='secondary';edit.textContent='Edit Published Event';
@@ -1027,6 +1085,8 @@ async function activateInspectorTab(key){
   toast('Administrator access is required to manage newsletters, lodges, inspectors, or settings.',true);
   return;
  }
+ try{await ensureDeskScope();}catch(ex){toast(ex.message,true);return;}
+ deskTab=key;refreshDeskScopeUI();
  all('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===key));
  all('.desk-nav-menu').forEach(menu=>{
   menu.classList.toggle('active',!!menu.querySelector('.tab.active'));
@@ -1065,10 +1125,11 @@ document.addEventListener('keydown',event=>{
  if(current){current.open=false;current.querySelector('summary').focus();}
 });
 async function loadHistory(p=0){
- historyPage=Math.max(0,p);
+ const scopeVersion=deskScopeVersion;historyPage=Math.max(0,p);
  const el=$('history-content');el.textContent='Loading activity…';
  try{
   const d=await api('audit',null,{page:historyPage,activity:$('log-action').value});
+  if(scopeVersion!==deskScopeVersion)return;
   el.replaceChildren();
   for(const h of (Array.isArray(d.items)?d.items:[])){
    const box=document.createElement('article');box.className='audit-item';
@@ -1076,7 +1137,7 @@ async function loadHistory(p=0){
    const left=document.createElement('div');
    const title=document.createElement('strong');title.textContent=h.event_title||'Event request';
    const action=document.createElement('div');action.className='audit-action';action.textContent=auditAction(h);
-   const meta=document.createElement('small');meta.className='muted';meta.textContent=[h.request_code||h.event_code,fmt(h.occurred_at),h.actor_email||'System'].filter(Boolean).join(' · ');
+   const meta=document.createElement('small');meta.className='muted';meta.textContent=[deskDivisionName(h.division_id),h.request_code||h.event_code,fmt(h.occurred_at),h.actor_email||'System'].filter(Boolean).join(' · ');
    left.append(title,action,meta);
    row.append(left);
    if(h.request_id||h.event_id){
